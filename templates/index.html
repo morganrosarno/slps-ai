@@ -10,9 +10,12 @@
 
     <input type="file" id="fileInput">
     <br><br>
+
     <button onclick="analizza()">Analizza</button>
 
-    <p id="output"></p>
+    <br><br>
+
+    <div id="output" style="background:#eee; padding:20px; min-height:50px;"></div>
 
     <script>
         async function analizza() {
@@ -35,15 +38,28 @@
                     body: formData
                 });
 
-                const data = await response.json();
+                // 🔥 CONTROLLO RISPOSTA
+                const text = await response.text();
+                console.log("RAW RESPONSE:", text);
 
-                console.log("RISPOSTA:", data);
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    output.innerText = "Errore: risposta non JSON";
+                    return;
+                }
 
-                output.innerText = data.risultato;
+                // 🔥 ALLINEAMENTO PERFETTO
+                if (data.risultato !== undefined) {
+                    output.innerText = data.risultato;
+                } else {
+                    output.innerText = "Errore: campo 'risultato' mancante";
+                }
 
             } catch (error) {
                 console.error(error);
-                output.innerText = "Errore nella richiesta";
+                output.innerText = "Errore di connessione";
             }
         }
     </script>
