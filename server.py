@@ -1,6 +1,6 @@
-import os
-from flask import Flask, render_template, request
+from flask import Flask, request, jsonify, render_template
 from slps_ai import analizza_immagine
+import os
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -12,19 +12,24 @@ def index():
 
 @app.route("/analizza", methods=["POST"])
 def analizza():
+    if "file" not in request.files:
+        return jsonify({"risultato": "Nessun file caricato"})
+
     file = request.files["file"]
-    percorso = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(percorso)
 
-    risultato = analizza_immagine(percorso)
+    if file.filename == "":
+        return jsonify({"risultato": "File non valido"})
 
-    return render_template(
-        "index.html",
-        risultato=risultato,
-        immagine=percorso
-    )
+    path = os.path.join(UPLOAD_FOLDER, file.filename)
+    file.save(path)
 
-# 🔥 QUESTO È FONDAMENTALE PER RENDER
+    try:
+        risultato = analizza_immagine(path)
+    except Exception as e:
+        return jsonify({"risultato": f"Errore AI: {str(e)}"})
+
+    return jsonify({"risultato": risultato})
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True)
