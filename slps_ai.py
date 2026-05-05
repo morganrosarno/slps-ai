@@ -1,128 +1,100 @@
-import sys
-video_path = sys.argv[1]
-
-from ultralytics import YOLO
-import cv2
 import os
-import math
+import base64
+from openai import OpenAI
 
-# === CONFIG ===
-FRAME_FOLDER = "frames"
-MODEL = YOLO("yolov8n.pt")
+# Inizializza client OpenAI (legge automaticamente OPENAI_API_KEY dalle env)
+client = OpenAI()
 
-# === FUNZIONE DISTANZA ===
-def distanza(p1, p2):
-    return math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
+def analizza_immagine(percorso_immagine):
+    """
+    Analizza un'immagine di cantiere e restituisce:
+    - livello di rischio
+    - punteggio
+    - spiegazione tecnica
+    - eventuali domande da porre
+    """
 
-# === ANALISI ===
-tot_persone = 0
-tot_mezzi = 0
-interferenze = 0
+    # 🔒 Controllo file
+    if not os.path.exists(percorso_immagine):
+        return {
+            "livello": "errore",
+            "punteggio": 0,
+            "descrizione": "Immagine non trovata",
+            "domande": []
+        }
 
-frames = sorted([f for f in os.listdir(FRAME_FOLDER) if f.endswith(".jpg")])
+    # 📷 Legge immagine e la converte in base64
+    with open(percorso_immagine, "rb") as f:
+        img_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-for frame_name in frames:
-    path = os.path.join(FRAME_FOLDER, frame_name)
-    img = cv2.imread(path)
+    # 🧠 PROMPT SERIO (generico, NON hardcoded su casi specifici)
+    prompt = """
+Sei uno specialista sicurezza sul lavoro (SLPS) esperto in ambito svizzero.
 
-    results = MODEL(img)[0]
+Analizza l'immagine fornita e:
+1. Identifica possibili pericoli o situazioni non sicure
+2. Valuta il livello di rischio (basso, medio, alto)
+3. Assegna un punteggio da 0 a 100
+4. Spiega il ragionamento tecnico (NON generico)
+5. Indica eventuali incertezze
+6. Formula domande utili per migliorare la valutazione
 
-    persone = []
-    mezzi = []
+ATTENZIONE:
+- NON inventare rischi se non evidenti
+- Se l'immagine è ambigua, dichiaralo chiaramente
+- NON dare per scontato l'uso dell'attrezzatura
+- Il rischio dipende da contesto (carico, quota, uso reale)
 
-    for box in results.boxes:
-        cls = int(box.cls[0])
-        label = MODEL.names[cls]
+Rispondi SOLO in JSON con questo formato:
 
-        x1, y1, x2, y2 = box.xyxy[0]
-        cx = int((x1 + x2) / 2)
-        cy = int((y1 + y2) / 2)
+{
+  "livello": "basso | medio | alto",
+  "punteggio": numero,
+  "descrizione": "spiegazione tecnica",
+  "domande": ["domanda1", "domanda2"]
+}
+"""
 
-        if label == "person":
-            persone.append((cx, cy))
-        if label in ["truck", "bus", "car"]:
-            mezzi.append((cx, cy))
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=800
+        )
 
-    tot_persone += len(persone)
-    tot_mezzi += len(mezzi)
+        risposta = response.choices[0].message.content
 
-    # === INTERFERENZA ===
-    for p in persone:
-        for m in mezzi:
-            d = distanza(p, m)
-            if d < 300:  # soglia empirica
-                interferenze += 1
+        # 🔁 Prova a interpretare JSON
+        import json
+        try:
+            dati = json.loads(risposta)
+            return dati
+        except:
+            # fallback se AI risponde male
+            return {
+                "livello": "errore",
+                "punteggio": 0,
+                "descrizione": risposta,
+                "domande": []
+            }
 
-# === CALCOLO RISCHIO ===
-rischio = 0
-
-if tot_persone > 0 and tot_mezzi > 0:
-    rischio += 40
-
-if interferenze > 0:
-    rischio += 40
-
-if tot_mezzi > 3:
-    rischio += 10
-
-if tot_persone > 3:
-    rischio += 10
-
-# clamp
-if rischio > 100:
-    rischio = 100
-
-# === CLASSIFICAZIONE ===
-if rischio >= 70:
-    livello = "ELEVATO"
-elif rischio >= 40:
-    livello = "MEDIO"
-else:
-    livello = "BASSO"
-
-# === OUTPUT PROFESSIONALE ===
-print("\n=== ANALISI SLPS ===\n")
-
-if rischio == 0:
-    print("⚪ RISCHIO NON VALUTABILE")
-    print("\nOSSERVAZIONE:")
-    print("Nessuna interazione significativa rilevata tra lavoratori e mezzi.")
-
-else:
-    print(f"🔴 RISCHIO: {livello}")
-    print(f"PUNTEGGIO: {rischio}/100\n")
-
-    print("SCENARIO:")
-    print("Presenza simultanea di lavoratori e mezzi operativi nel medesimo spazio.")
-
-    print("\nPERICOLO:")
-    print("Rischio di investimento o schiacciamento durante le manovre dei mezzi.")
-
-    print("\nFATTORI CRITICI:")
-    print("- Possibili angoli ciechi dei macchinisti")
-    print("- Mancanza di separazione uomo-mezzo")
-    print("- Interferenza operativa nello stesso spazio")
-
-    print("\nVALUTAZIONE:")
-    if livello == "ELEVATO":
-        print("Situazione pericolosa immediata con elevata probabilità di incidente grave.")
-    elif livello == "MEDIO":
-        print("Situazione da monitorare con rischio concreto in caso di errore operativo.")
-    else:
-        print("Rischio contenuto ma presente in condizioni dinamiche.")
-
-    print("\nAZIONE IMMEDIATA:")
-    print("- Interrompere le interferenze uomo-mezzo")
-    print("- Allontanare i lavoratori dalle zone di manovra")
-
-    print("\nMISURE:")
-    print("- Separazione fisica aree lavoro")
-    print("- Definizione zone mezzi")
-    print("- Addetto segnalazione manovre")
-    print("- Formazione lavoratori su rischi investimento")
-
-print("\nBASI LEGALI:")
-print("- OPI art. 6 (informazione, istruzione e formazione dei lavoratori)")
-print("- OLCostr art. 3 (principi di sicurezza sul lavoro)")
-print("- OLCostr art. 4 (misure di protezione)")
-print("- OLCostr art. 19 (coordinamento e sicurezza nei lavori con più operatori/mezz i)")
+    except Exception as e:
+        return {
+            "livello": "errore",
+            "punteggio": 0,
+            "descrizione": f"Errore AI: {str(e)}",
+            "domande": []
+        }
