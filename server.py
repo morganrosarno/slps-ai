@@ -26,7 +26,7 @@ def analizza():
     try:
         risultato = analizza_immagine(path)
     except Exception as e:
-        return jsonify({"risultato": f"Errore AI: {str(e)}"})
+        return jsonify({"risultato": f"Errore backend: {str(e)}"})
 
     return jsonify({"risultato": risultato})
 
