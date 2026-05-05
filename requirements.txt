@@ -1,6 +1,4 @@
 flask
+gunicorn
 ultralytics
-opencv-python
 pillow
-numpy
-openai
