@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>SLPS AI</title>
+
+<style>
+body { font-family: Arial; background:#f5f5f5; padding:40px; }
+.container { background:white; padding:30px; border-radius:10px; max-width:900px; }
+button { padding:10px 20px; margin-top:10px; }
+pre { background:#eee; padding:15px; }
+</style>
+</head>
+
+<body>
+
+<div class="container">
+<h1>SLPS AI</h1>
+
+<input type="file" id="fileInput"><br>
+<button onclick="analizza()">Analizza</button>
+
+<div id="output"></div>
+</div>
+
+<script>
+let fileCaricato = null
+
+document.getElementById("fileInput").addEventListener("change", e=>{
+    fileCaricato = e.target.files[0]
+})
+
+async function analizza(){
+
+    const formData = new FormData()
+    formData.append("file", fileCaricato)
+
+    document.getElementById("output").innerHTML = "Analisi..."
+
+    const res = await fetch("/analizza", {
+        method: "POST",
+        body: formData
+    })
+
+    const data = await res.json()
+
+    document.getElementById("output").innerHTML =
+        `<pre>${data.analisi}</pre>`
+}
+</script>
+
+</body>
+</html>
