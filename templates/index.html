@@ -1,53 +1,52 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-<meta charset="UTF-8">
-<title>SLPS AI</title>
-
-<style>
-body { font-family: Arial; background:#f5f5f5; padding:40px; }
-.container { background:white; padding:30px; border-radius:10px; max-width:900px; }
-button { padding:10px 20px; margin-top:10px; }
-pre { background:#eee; padding:15px; }
-</style>
+    <meta charset="UTF-8">
+    <title>SLPS AI</title>
 </head>
+<body style="font-family: Arial; padding: 40px;">
 
-<body>
+    <h1>SLPS AI</h1>
 
-<div class="container">
-<h1>SLPS AI</h1>
+    <input type="file" id="fileInput">
+    <br><br>
+    <button onclick="analizza()">Analizza</button>
 
-<input type="file" id="fileInput"><br>
-<button onclick="analizza()">Analizza</button>
+    <p id="output"></p>
 
-<div id="output"></div>
-</div>
+    <script>
+        async function analizza() {
+            const fileInput = document.getElementById("fileInput");
+            const output = document.getElementById("output");
 
-<script>
-let fileCaricato = null
+            if (fileInput.files.length === 0) {
+                output.innerText = "Seleziona un file";
+                return;
+            }
 
-document.getElementById("fileInput").addEventListener("change", e=>{
-    fileCaricato = e.target.files[0]
-})
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
 
-async function analizza(){
+            output.innerText = "Analisi in corso...";
 
-    const formData = new FormData()
-    formData.append("file", fileCaricato)
+            try {
+                const response = await fetch("/analizza", {
+                    method: "POST",
+                    body: formData
+                });
 
-    document.getElementById("output").innerHTML = "Analisi..."
+                const data = await response.json();
 
-    const res = await fetch("/analizza", {
-        method: "POST",
-        body: formData
-    })
+                console.log("RISPOSTA:", data);
 
-    const data = await res.json()
+                output.innerText = data.risultato;
 
-    document.getElementById("output").innerHTML =
-        `<pre>${data.analisi}</pre>`
-}
-</script>
+            } catch (error) {
+                console.error(error);
+                output.innerText = "Errore nella richiesta";
+            }
+        }
+    </script>
 
 </body>
 </html>
