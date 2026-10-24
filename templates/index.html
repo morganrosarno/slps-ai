@@ -1,68 +1,58 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-    <meta charset="UTF-8">
-    <title>SLPS AI</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="SLPS AI: analisi fotografica e misure operative per la sicurezza sul lavoro.">
+  <title>SLPS AI · Pilota privato</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
-<body style="font-family: Arial; padding: 40px;">
-
-    <h1>SLPS AI</h1>
-
-    <input type="file" id="fileInput">
-    <br><br>
-
-    <button onclick="analizza()">Analizza</button>
-
-    <br><br>
-
-    <div id="output" style="background:#eee; padding:20px; min-height:50px;"></div>
-
-    <script>
-        async function analizza() {
-            const fileInput = document.getElementById("fileInput");
-            const output = document.getElementById("output");
-
-            if (fileInput.files.length === 0) {
-                output.innerText = "Seleziona un file";
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append("file", fileInput.files[0]);
-
-            output.innerText = "Analisi in corso...";
-
-            try {
-                const response = await fetch("/analizza", {
-                    method: "POST",
-                    body: formData
-                });
-
-                // 🔥 CONTROLLO RISPOSTA
-                const text = await response.text();
-                console.log("RAW RESPONSE:", text);
-
-                let data;
-                try {
-                    data = JSON.parse(text);
-                } catch {
-                    output.innerText = "Errore: risposta non JSON";
-                    return;
-                }
-
-                // 🔥 ALLINEAMENTO PERFETTO
-                if (data.risultato !== undefined) {
-                    output.innerText = data.risultato;
-                } else {
-                    output.innerText = "Errore: campo 'risultato' mancante";
-                }
-
-            } catch (error) {
-                console.error(error);
-                output.innerText = "Errore di connessione";
-            }
-        }
-    </script>
-
+<body>
+  <a class="skip-link" href="#main">Vai al contenuto</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="SLPS AI, pagina iniziale"><span class="brand-mark" aria-hidden="true">S</span><span>SLPS <strong>AI</strong><small>Sicurezza sul lavoro · Svizzera</small></span></a>
+    <div class="header-actions"><span class="pilot-badge">Pilota privato</span><button id="logout" class="button subtle" type="button" hidden>Esci</button></div>
+  </header>
+  <main id="main">
+    <div id="status" class="notice" role="status" aria-live="polite" hidden></div>
+    <section id="login-panel" class="login-panel" aria-labelledby="login-title" hidden>
+      <p class="eyebrow">Accesso riservato</p><h1 id="login-title">Dal dettaglio alla misura concreta.</h1>
+      <p class="intro">Carica una foto, descrivi l’attività e verifica le azioni proposte. I dubbi restano visibili, così puoi completarli con le informazioni del luogo di lavoro.</p>
+      <form id="login-form"><label for="password">Password del pilota</label><input id="password" name="password" type="password" autocomplete="current-password" required><button id="login-button" class="button primary" type="submit">Accedi</button></form>
+    </section>
+    <section id="workspace" hidden>
+      <div class="page-intro"><div><p class="eyebrow">Nuova valutazione</p><h1>Cosa serve fare, qui e ora.</h1><p class="intro">Parti dalla situazione reale. Aggiungi ciò che la foto non può raccontare.</p></div><span class="step-chip">Foto + contesto</span></div>
+      <div class="work-grid">
+        <section class="panel input-panel" aria-labelledby="input-title">
+          <div class="section-heading"><span class="section-number">01</span><h2 id="input-title">La situazione</h2></div>
+          <form id="analysis-form">
+            <label class="upload-zone" for="photo"><span class="upload-icon" aria-hidden="true">+</span><strong>Scegli una fotografia</strong><span>JPG, PNG o WebP · massimo 10 MB</span><input id="photo" name="file" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+            <figure id="preview-wrap" class="preview-wrap" hidden><img id="preview" alt="Fotografia selezionata per l’analisi"><figcaption id="file-name"></figcaption></figure>
+            <label for="context">Attività e informazioni utili <span class="optional">facoltativo</span></label>
+            <textarea id="context" name="context" rows="5" maxlength="6000" placeholder="Cosa si sta facendo? Quali macchine sono in funzione? Sono presenti protezioni o persone fuori dall’inquadratura?"></textarea>
+            <p class="field-note">Indica soltanto i dati necessari alla valutazione. Le informazioni che aggiungi vengono distinte dalle osservazioni sulla foto.</p>
+            <button id="analyse-button" class="button primary full-width" type="submit">Analizza la situazione</button>
+            <p class="storage-note">Questa versione non conserva uno storico dei casi. Esporta il risultato che vuoi mantenere prima di chiudere la pagina.</p>
+          </form>
+        </section>
+        <section id="result-region" class="result-region" aria-labelledby="result-title" aria-live="polite">
+          <div id="empty-state" class="empty-state"><span class="empty-symbol" aria-hidden="true">↗</span><h2 id="result-title">Prima le azioni utili.</h2><p>Qui troverai le misure da attuare, i tempi proposti e le domande che cambiano la valutazione.</p><div class="empty-steps"><span>Osservazione</span><span>Azione</span><span>Verifica</span></div></div>
+          <div id="busy-state" class="panel busy-state" hidden><span class="spinner" aria-hidden="true"></span><h2>Analisi in corso</h2><p>Sto esaminando la foto e il contesto. Mantieni aperta questa pagina.</p></div>
+          <article id="report" hidden>
+            <div class="report-header"><div><p class="eyebrow">Risultato da verificare sul posto</p><h2>Analisi della situazione</h2></div><div class="report-tools"><button id="export-json" class="button subtle" type="button">Esporta JSON</button><button id="print-report" class="button subtle" type="button">Stampa rapporto</button></div></div>
+            <p id="assessment-state" class="assessment-state"></p><p id="summary" class="summary"></p>
+            <div id="findings"></div>
+            <section id="questions-panel" class="panel questions-panel" hidden><div class="section-heading"><span class="section-number">?</span><h2>Per completare la valutazione</h2></div><p class="section-help">Rispondi prima alle domande decisive. Se non conosci una risposta, lasciala vuota.</p><form id="questions-form"><div id="questions"></div><button id="reanalyse-button" class="button primary" type="submit">Aggiorna con le risposte</button></form></section>
+            <section id="print-questions" class="print-questions"></section>
+            <details id="details-panel" class="panel details-panel"><summary>Limiti, fonti e dettagli dell’analisi</summary><div id="limitations"></div><div id="sources"></div><p id="analysis-meta" class="meta"></p><p class="field-note">La foto rappresenta un momento e un’inquadratura. Le misure proposte vanno confermate rispetto alle condizioni effettive.</p></details>
+          </article>
+        </section>
+      </div>
+    </section>
+  </main>
+  <footer><span>SLPS AI</span><span>Osservare con precisione. Agire con criterio.</span></footer>
+  <noscript>Per utilizzare il pilota SLPS AI è necessario abilitare JavaScript.</noscript>
 </body>
 </html>
