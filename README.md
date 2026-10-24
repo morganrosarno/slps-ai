@@ -60,6 +60,8 @@ Installa requirements-dev.txt ed esegui:
 python -m pytest -q
 node --check static/app.js
 node --test tests/test_ui_feedback.cjs
+python -m unittest -q tests.test_preflight
+python scripts/preflight.py
 
 I test software simulano il fornitore e non dimostrano la qualità SLPS del modello.
 I test Node del feedback usano un DOM simulato, senza dipendenze npm: non sono una prova visiva nel browser.
@@ -69,6 +71,10 @@ Prima del rilascio, verificare nel browser desktop e a 360/390 px (anche con zoo
 che tutti i comandi siano raggiungibili; controllare l'anteprima A4 multipagina con foto, contesto, date e domande.
 La prova reale con API, la verifica grafica nel browser e la configurazione dell'hosting
 restano necessarie. Non è stata pubblicata una nuova versione online.
+
+La procedura di configurazione, controllo offline e ripristino del pilota è in
+`docs/PILOT_DEPLOY.md`. Il preflight non contatta il fornitore AI e non prova
+credito, disponibilità del modello o persistenza effettiva del volume.
 
 ## Prima del rilascio commerciale
 1. Prova completa con API attiva e modello scelto: foto → analisi → chiarimento → riesame.
