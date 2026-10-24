@@ -63,6 +63,10 @@ node --test tests/test_ui_feedback.cjs
 
 I test software simulano il fornitore e non dimostrano la qualità SLPS del modello.
 I test Node del feedback usano un DOM simulato, senza dipendenze npm: non sono una prova visiva nel browser.
+Coprono anche ordine azione/termine, domande decisive nei singoli rilievi e nella lista generale,
+conservazione della foto e del contesto del rapporto precedente dopo un errore, e preparazione della stampa.
+Prima del rilascio, verificare nel browser desktop e a 360/390 px (anche con zoom al 200%)
+che tutti i comandi siano raggiungibili; controllare l'anteprima A4 multipagina con foto, contesto, date e domande.
 La prova reale con API, la verifica grafica nel browser e la configurazione dell'hosting
 restano necessarie. Non è stata pubblicata una nuova versione online.
 

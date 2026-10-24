@@ -45,9 +45,11 @@
           <article id="report" hidden>
             <div class="report-header"><div><p class="eyebrow">Risultato da verificare sul posto</p><h2 id="report-title" tabindex="-1">Analisi completata</h2></div><div class="report-tools"><button id="export-json" class="button subtle" type="button">Esporta JSON</button><button id="print-report" class="button subtle" type="button">Stampa rapporto</button></div></div>
             <p id="report-notice" class="notice warning" hidden></p>
+            <section id="case-summary" class="case-summary" aria-label="Foto e contesto della valutazione"></section>
             <p id="assessment-state" class="assessment-state"></p><p id="summary" class="summary"></p>
+            <div id="question-summary" class="question-summary" hidden></div>
             <div id="findings"></div>
-            <section id="questions-panel" class="panel questions-panel" hidden><div class="section-heading"><span class="section-number">?</span><h2>Per completare la valutazione</h2></div><p class="section-help">Rispondi prima alle domande decisive. Se non conosci una risposta, lasciala vuota.</p><form id="questions-form"><div id="questions"></div><button id="reanalyse-button" class="button primary" type="submit">Aggiorna con le risposte</button><div id="questions-feedback" class="notice action-feedback" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden></div></form></section>
+            <section id="questions-panel" class="panel questions-panel" hidden><div class="section-heading"><span class="section-number">?</span><h2 id="questions-title" tabindex="-1">Per completare la valutazione</h2></div><p class="section-help">Rispondi prima alle domande decisive. Se non conosci una risposta, lasciala vuota.</p><form id="questions-form"><div id="questions"></div><button id="reanalyse-button" class="button primary" type="submit">Aggiorna con le risposte</button><div id="questions-feedback" class="notice action-feedback" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden></div></form></section>
             <section id="print-questions" class="print-questions"></section>
             <details id="details-panel" class="panel details-panel"><summary>Limiti, fonti e dettagli dell’analisi</summary><div id="limitations"></div><div id="sources"></div><p id="analysis-meta" class="meta"></p><p class="field-note">La foto rappresenta un momento e un’inquadratura. Le misure proposte vanno confermate rispetto alle condizioni effettive.</p></details>
           </article>

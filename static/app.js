@@ -52,6 +52,7 @@
   function clearAnalysis() {
     state.analysis = null; state.answers.clear(); state.submittedContext = ''; clearFeedback();
     $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren();
+    $('case-summary').replaceChildren(); $('question-summary').replaceChildren(); $('question-summary').hidden = true;
     $('report-notice').hidden = true; $('report-title').textContent = 'Analisi completata';
     $('analysis-announcement').textContent = '';
     $('result-region').setAttribute('aria-labelledby', 'result-title'); updateButton();
@@ -97,7 +98,7 @@
     try {
       const data = await api('/analizza', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
       if (!data.analysis || !Array.isArray(data.analysis.findings)) throw new Error('Il risultato è incompleto. Non è stato presentato come analisi valida.');
-      await renderAnalysis(data.analysis); state.analysis = data.analysis; state.submittedContext = context;
+      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.submittedContext = context;
       $('report-title').textContent = 'Analisi completata'; $('report-notice').hidden = true;
       $('analysis-announcement').textContent = 'Analisi completata. Il risultato è disponibile e va verificato sul posto.';
     } catch (err) {
@@ -135,21 +136,54 @@
     canvas.width = Math.max(1, Math.round(sw * scale)); canvas.height = Math.max(1, Math.round(sh * scale));
     canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', 'Dettaglio della fotografia per l’osservazione ' + id);
     const ctx = canvas.getContext('2d'); if (!ctx) return null;
-    ctx.drawImage(image, x * image.naturalWidth, y * image.naturalHeight, sw, sh, 0, 0, canvas.width, canvas.height);
-    const caption = make('figcaption'); caption.append(make('span', 'Dettaglio indicato dall’AI'));
+    try { ctx.drawImage(image, x * image.naturalWidth, y * image.naturalHeight, sw, sh, 0, 0, canvas.width, canvas.height); } catch { return null; }
+    const caption = make('figcaption'); caption.append(make('span', 'Osservazione ' + id + ' · ritaglio indicato dall’AI'));
     const link = make('a', 'Foto completa'); link.href = state.imageUrl; link.target = '_blank'; link.rel = 'noopener'; caption.append(link); figure.append(canvas, caption); return figure;
   }
   function validUrl(url) { try { const parsed = new URL(url); return parsed.protocol === 'https:' ? parsed.href : null; } catch { return null; } }
-  async function renderAnalysis(analysis) {
+  function collectQuestions(analysis) {
+    const merged = new Map();
+    const add = (text, critical, why, findingId) => {
+      if (typeof text !== 'string' || !text.trim()) return;
+      const key = text.trim().replace(/\s+/g, ' ');
+      const question = merged.get(key) || { text: key, critical: false, why: '', findingIds: [] };
+      question.critical = question.critical || Boolean(critical);
+      if (!question.why && why) question.why = why;
+      if (findingId && !question.findingIds.includes(findingId)) question.findingIds.push(findingId);
+      merged.set(key, question);
+    };
+    (analysis.questions || []).forEach(q => add(q.text, q.critical, q.why));
+    analysis.findings.forEach(f => add(f.question, f.critical_unknown, '', f.id));
+    return [...merged.values()].sort((a, b) => Number(b.critical) - Number(a.critical));
+  }
+  async function renderAnalysis(analysis, submittedContext) {
     // Build off-screen: a rendering failure must not overwrite the previous valid report.
     const draft = document.getElementById('report').cloneNode(true);
     const $ = id => id === 'preview' ? document.getElementById(id) : draft.querySelector('#' + id);
     $('summary').textContent = analysis.summary || '';
-    const hasUnknown = Boolean(analysis.needs_clarification) || analysis.findings.some(f => f.critical_unknown || f.risk === 'undetermined') || (analysis.questions || []).some(q => q.critical);
+    const questionList = collectQuestions(analysis);
+    const hasUnknown = Boolean(analysis.needs_clarification) || analysis.findings.some(f => f.critical_unknown || f.risk === 'undetermined') || questionList.some(q => q.critical);
     $('assessment-state').textContent = hasUnknown ? 'Valutazione da completare · restano informazioni decisive da verificare.' : 'Osservazioni e misure proposte · da confermare nelle condizioni effettive.';
     $('assessment-state').className = 'assessment-state' + (hasUnknown ? ' incomplete' : '');
     $('findings').replaceChildren();
     let image = $('preview'); try { await image.decode(); } catch { image = null; }
+    // Snapshot only the photo and context used by this successful request.
+    const meta = analysis.meta || {};
+    $('case-summary').replaceChildren();
+    $('case-summary').append(make('h3', 'Situazione analizzata'));
+    if (image && state.imageUrl) {
+      const photo = make('img'); photo.src = state.imageUrl; photo.alt = 'Fotografia completa utilizzata per questa analisi'; photo.className = 'case-photo';
+      $('case-summary').append(photo);
+    } else $('case-summary').append(make('p', 'Fotografia non disponibile per la stampa. Verificare il rapporto con la foto originale.', 'notice warning'));
+    $('case-summary').append(make('p', 'Contesto e chiarimenti inviati', 'measure-label'), make('p', submittedContext || 'Nessun contesto aggiuntivo fornito.', 'case-context'));
+    $('case-summary').append(make('p', 'Data analisi: ' + (meta.created_at || 'non disponibile') + ' · Metodo: ' + (meta.method_version || meta.prompt_version || 'non indicato'), 'case-meta'));
+    const decisiveCount = questionList.filter(q => q.critical).length;
+    $('question-summary').replaceChildren(); $('question-summary').hidden = !questionList.length;
+    if (questionList.length) {
+      $('question-summary').append(make('p', 'Domande da chiarire: ' + questionList.length + ' · Informazioni decisive: ' + decisiveCount));
+      const jump = make('button', decisiveCount ? 'Vai alle domande decisive' : 'Vai alle domande', 'button subtle'); jump.type = 'button';
+      jump.addEventListener('click', () => focusFeedback('questions-title')); $('question-summary').append(jump);
+    }
     const priority = f => f.risk === 'high' ? 0 : f.critical_unknown ? 1 : ({ undetermined: 2, medium: 3, low: 4 }[f.risk] ?? 5);
     const ordered = [...analysis.findings].sort((a, b) => priority(a) - priority(b));
     if (!ordered.length) $('findings').append(make('p', 'Nessuna osservazione strutturata restituita. Questo non dimostra l’assenza di pericoli.', 'notice warning'));
@@ -157,35 +191,40 @@
       const risk = Object.hasOwn(riskLabels, finding.risk) ? finding.risk : 'undetermined';
       const card = make('section', null, 'finding ' + risk), top = make('div', null, 'finding-topline');
       top.append(make('span', 'Osservazione ' + finding.id, 'finding-id'), make('span', riskLabels[risk], 'risk-tag ' + risk)); card.append(top, make('h3', finding.title));
-      const crop = await createCrop(finding.bbox, image, finding.id); if (crop) card.append(crop);
-      card.append(make('p', certaintyLabels[finding.certainty] || 'Da verificare sul posto', 'evidence-label'), make('p', finding.evidence, 'evidence-text'));
       const measure = make('div', null, 'measure'); measure.append(make('p', 'Cosa fare', 'measure-label'), make('p', finding.action, 'measure-action'), make('p', 'Quando: ' + (finding.deadline || 'Da definire dopo gli accertamenti'), 'deadline')); card.append(measure);
+      const crop = await createCrop(finding.bbox, image, finding.id);
+      if (crop) card.append(crop);
+      else {
+        const fallback = make('p', 'Osservazione ' + finding.id + ' · Ritaglio non disponibile. ', 'crop-fallback');
+        const link = make('a', 'Apri la fotografia completa'); link.href = state.imageUrl; link.target = '_blank'; link.rel = 'noopener'; fallback.append(link, make('span', image ? 'Consulta la fotografia completa all’inizio del rapporto.' : 'Confrontare con la foto originale, non disponibile in questa stampa.', 'print-photo-reference')); card.append(fallback);
+      }
+      card.append(make('p', certaintyLabels[finding.certainty] || 'Da verificare sul posto', 'evidence-label'), make('p', finding.evidence, 'evidence-text'));
       addText(card, 'p', finding.exposed_people ? 'Persone esposte: ' + finding.exposed_people : '', 'finding-detail');
       addText(card, 'p', finding.question ? 'Da chiarire: ' + finding.question : '', 'finding-question');
       const cited = (finding.references || []).map(ref => (analysis.sources || []).find(s => s.id === ref.source_id)).filter(Boolean);
       if (cited.length) { const p = make('p', 'Riferimenti: ', 'finding-detail'); cited.forEach((source, index) => { if (index) p.append(document.createTextNode(' · ')); const url = validUrl(source.url); const link = make(url ? 'a' : 'span', source.title); if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; } p.append(link); }); card.append(p); }
       $('findings').append(card);
     }
-    const questionList = [...(analysis.questions || [])].sort((a, b) => Number(b.critical) - Number(a.critical));
     $('questions').replaceChildren(); $('questions-panel').hidden = !questionList.length;
     $('print-questions').replaceChildren();
     if (questionList.length) {
       $('print-questions').append(make('h3', 'Domande ancora da chiarire'));
       const list = make('ul');
-      questionList.forEach(q => list.append(make('li', (q.critical ? 'Informazione decisiva: ' : '') + q.text + (q.why ? ' — ' + q.why : ''))));
+      questionList.forEach(q => list.append(make('li', (q.critical ? 'Informazione decisiva: ' : '') + q.text + (q.findingIds.length ? ' · Osservazioni: ' + q.findingIds.join(', ') : '') + (q.why ? ' — ' + q.why : ''))));
       $('print-questions').append(list);
     }
     let furtherQuestions = null;
-    if (questionList.length > 3) {
+    const secondaryCount = questionList.length - decisiveCount;
+    if (secondaryCount > 3) {
       furtherQuestions = make('details', null, 'further-questions');
-      const extraCritical = questionList.slice(3).some(q => q.critical);
-      furtherQuestions.append(make('summary', 'Altre domande' + (extraCritical ? ' decisive' : '') + ' (' + (questionList.length - 3) + ')'));
+      furtherQuestions.append(make('summary', 'Altre domande di approfondimento (' + (secondaryCount - 3) + ')'));
     }
     questionList.forEach((q, index) => {
       const wrapper = make('div', null, 'question'); if (q.critical) wrapper.append(make('span', 'Informazione decisiva', 'critical-label'));
+      if (q.findingIds.length) wrapper.append(make('p', 'Osservazioni: ' + q.findingIds.join(', '), 'question-related'));
       const id = 'answer-' + index, label = make('label', q.text); label.htmlFor = id; const input = make('textarea'); input.id = id; input.rows = 2; input.maxLength = 1500; input.dataset.question = q.text; input.value = state.answers.get(q.text) || '';
       if (q.why) { const why = make('p', q.why, 'why'); why.id = id + '-why'; input.setAttribute('aria-describedby', why.id); wrapper.append(label, why, input); } else wrapper.append(label, input);
-      if (index < 3) $('questions').append(wrapper); else furtherQuestions.append(wrapper);
+      if (q.critical || index < decisiveCount + 3) $('questions').append(wrapper); else furtherQuestions.append(wrapper);
     });
     if (furtherQuestions) $('questions').append(furtherQuestions);
     $('limitations').replaceChildren();
@@ -194,14 +233,15 @@
     if (analysis.sources?.length) {
       const list = make('ul'); analysis.sources.forEach(source => { const li = make('li'); const url = validUrl(source.url), link = make(url ? 'a' : 'span', source.title); if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; } li.append(link); if (source.verified_at) li.append(document.createTextNode(' · verifica: ' + source.verified_at)); list.append(li); }); $('sources').append(list);
     } else $('sources').append(make('p', 'Nessuna fonte normativa verificata è associata a questa analisi. Gli obblighi specifici richiedono verifica prima di essere presentati come accertati.'));
-    const meta = analysis.meta || {}, parts = [];
+    const parts = [];
     if (meta.method_version || meta.prompt_version) parts.push('Metodo: ' + (meta.method_version || meta.prompt_version)); if (meta.model) parts.push('Modello: ' + meta.model); if (meta.created_at) parts.push('Analisi: ' + meta.created_at);
     $('analysis-meta').textContent = parts.join(' · ');
-    ['summary', 'assessment-state', 'findings', 'questions', 'print-questions', 'limitations', 'sources', 'analysis-meta'].forEach(id => {
+    ['summary', 'assessment-state', 'case-summary', 'question-summary', 'findings', 'questions', 'print-questions', 'limitations', 'sources', 'analysis-meta'].forEach(id => {
       const target = document.getElementById(id), content = $(id);
       target.replaceChildren(...content.childNodes); target.className = content.className;
     });
     document.getElementById('questions-panel').hidden = $('questions-panel').hidden;
+    document.getElementById('question-summary').hidden = $('question-summary').hidden;
   }
   $('export-json').addEventListener('click', () => {
     if (!state.analysis) return;
@@ -210,6 +250,15 @@
     const link = make('a'); link.href = url; link.download = 'SLPS_AI_analisi_' + new Date().toISOString().slice(0, 10) + '.json'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     notice('Analisi esportata in JSON. La fotografia non è inclusa nel file.');
   });
-  $('print-report').addEventListener('click', () => { if (state.analysis) { $('details-panel').open = true; window.print(); } });
+  $('print-report').addEventListener('click', async () => {
+    const analysis = state.analysis; if (!analysis || state.busy) return;
+    const photo = $('case-summary').querySelector('img');
+    if (photo) {
+      try { await photo.decode(); }
+      catch { notice('La fotografia non è pronta per la stampa. Riprova prima di stampare il rapporto.', 'error'); return; }
+    }
+    if (state.analysis !== analysis || state.busy) return;
+    $('details-panel').open = true; window.print();
+  });
   api('/api/session').then(applySession).catch(err => { $('login-panel').hidden = false; notice(err.message, 'error'); });
 })();
