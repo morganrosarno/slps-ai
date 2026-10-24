@@ -6,6 +6,25 @@
   const riskLabels = { high: 'Rischio alto', medium: 'Rischio medio', low: 'Rischio basso', undetermined: 'Rischio da determinare' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
   function notice(text, kind = '') { $('status').textContent = text; $('status').className = 'notice' + (kind ? ' ' + kind : ''); $('status').hidden = !text; }
+  function focusFeedback(id) {
+    const target = $(id);
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  }
+  function clearFeedback() {
+    ['analysis-feedback', 'questions-feedback'].forEach(id => { $(id).hidden = true; $(id).textContent = ''; });
+  }
+  function analysisError(message, origin) {
+    const target = $(origin + '-feedback');
+    target.textContent = message; target.className = 'notice action-feedback error'; target.hidden = false;
+    $('analysis-announcement').textContent = 'Il tentativo non ha prodotto un nuovo risultato.';
+    if (state.analysis) {
+      $('report-title').textContent = 'Analisi precedente';
+      $('report-notice').textContent = 'L’ultimo tentativo non ha prodotto un nuovo risultato. Questa analisi non include le modifiche o le risposte appena inviate.';
+      $('report-notice').hidden = false;
+    }
+    return target.id;
+  }
   async function api(url, options = {}) {
     const response = await fetch(url, { credentials: 'same-origin', ...options });
     let data;
@@ -24,10 +43,19 @@
   function updateButton() { $('analyse-button').disabled = state.busy || !state.configured; $('reanalyse-button').disabled = state.busy || !state.configured; $('export-json').disabled = state.busy || !state.analysis; $('print-report').disabled = state.busy || !state.analysis; }
   function setBusy(value) {
     state.busy = value; updateButton(); $('photo').disabled = value; $('context').disabled = value; $('logout').disabled = value;
+    $('analyse-button').textContent = value ? 'Analisi in corso…' : 'Analizza la situazione';
+    $('reanalyse-button').textContent = value ? 'Analisi in corso…' : 'Aggiorna con le risposte';
     $('busy-state').hidden = !value; $('report').hidden = value || !state.analysis; $('empty-state').hidden = value || Boolean(state.analysis);
     $('result-region').setAttribute('aria-busy', String(value));
+    $('result-region').setAttribute('aria-labelledby', value ? 'busy-title' : state.analysis ? 'report-title' : 'result-title');
   }
-  function clearAnalysis() { state.analysis = null; state.answers.clear(); state.submittedContext = ''; $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren(); }
+  function clearAnalysis() {
+    state.analysis = null; state.answers.clear(); state.submittedContext = ''; clearFeedback();
+    $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren();
+    $('report-notice').hidden = true; $('report-title').textContent = 'Analisi completata';
+    $('analysis-announcement').textContent = '';
+    $('result-region').setAttribute('aria-labelledby', 'result-title'); updateButton();
+  }
   $('login-form').addEventListener('submit', async e => {
     e.preventDefault(); $('login-button').disabled = true; notice('');
     try { await api('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ password: $('password').value }) }); $('password').value = ''; applySession(await api('/api/session')); }
@@ -47,8 +75,8 @@
     clearAnalysis(); notice('');
     if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; $('preview-wrap').hidden = true;
     const file = $('photo').files[0]; if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { notice('La fotografia supera 10 MB. Scegli un file più piccolo.', 'error'); $('photo').value = ''; return; }
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { notice('Scegli una fotografia JPG, PNG o WebP.', 'error'); $('photo').value = ''; return; }
+    if (file.size > 10 * 1024 * 1024) { focusFeedback(analysisError('La fotografia supera 10 MB. Scegli un file più piccolo.', 'analysis')); $('photo').value = ''; return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { focusFeedback(analysisError('Scegli una fotografia JPG, PNG o WebP.', 'analysis')); $('photo').value = ''; return; }
     state.file = file; state.imageUrl = URL.createObjectURL(file); $('preview').src = state.imageUrl; $('file-name').textContent = file.name; $('preview-wrap').hidden = false;
   });
   function composedContext() {
@@ -56,35 +84,46 @@
     if (state.answers.size) parts.push('Chiarimenti forniti dall’utilizzatore:\n' + Array.from(state.answers.entries()).map(([question, answer]) => question + '\nRisposta: ' + answer).join('\n\n'));
     return parts.filter(Boolean).join('\n\n');
   }
-  async function analyse() {
+  async function analyse(origin = 'analysis') {
     if (state.busy) return;
-    if (!state.file) { notice('Seleziona una fotografia prima di avviare l’analisi.', 'error'); return; }
-    const context = composedContext(); if (context.length > 8000) { notice('Il contesto e le risposte superano 8.000 caratteri. Riduci i dettagli secondari prima di continuare.', 'error'); return; }
-    if (!state.configured) { notice('Completa la configurazione del servizio prima di avviare un’analisi.', 'warning'); return; }
-    notice(''); setBusy(true); state.controller = new AbortController();
+    clearFeedback();
+    if (!state.file) { focusFeedback(analysisError('Seleziona una fotografia prima di avviare l’analisi.', origin)); return; }
+    const context = composedContext(); if (context.length > 8000) { focusFeedback(analysisError('Il contesto e le risposte superano 8.000 caratteri. Riduci i dettagli secondari prima di continuare.', origin)); return; }
+    if (!state.configured) { focusFeedback(analysisError('Completa la configurazione del servizio prima di avviare un’analisi.', origin)); return; }
+    notice(''); setBusy(true); focusFeedback('busy-title'); state.controller = new AbortController();
+    $('analysis-announcement').textContent = 'Analisi in corso.';
+    let outcomeTarget = 'report-title';
     const form = new FormData(); form.append('file', state.file); form.append('context', context);
     try {
       const data = await api('/analizza', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
       if (!data.analysis || !Array.isArray(data.analysis.findings)) throw new Error('Il risultato è incompleto. Non è stato presentato come analisi valida.');
-      state.analysis = data.analysis; state.submittedContext = context; await renderAnalysis(data.analysis);
-      $('report').hidden = false;
+      await renderAnalysis(data.analysis); state.analysis = data.analysis; state.submittedContext = context;
+      $('report-title').textContent = 'Analisi completata'; $('report-notice').hidden = true;
+      $('analysis-announcement').textContent = 'Analisi completata. Il risultato è disponibile e va verificato sul posto.';
     } catch (err) {
       if (err.status === 401) {
+        analysisError('Sessione scaduta. Il tentativo non ha prodotto un nuovo risultato.', origin);
         applySession({ authenticated: false, configured: false });
         try { applySession(await api('/api/session')); notice('Sessione scaduta. Accedi nuovamente per continuare. Foto, contesto e risultato precedente restano in questa pagina.', 'warning'); }
         catch { $('login-button').disabled = true; notice('Sessione scaduta. Ricarica la pagina per ottenere un nuovo accesso. I dati non esportati andranno persi.', 'error'); }
+        outcomeTarget = 'status';
       }
       else {
         const message = err.name === 'AbortError' ? 'Richiesta interrotta. Non è stata avviata automaticamente una nuova analisi.' : err.message;
-        notice(message + (state.analysis ? ' L’aggiornamento non è riuscito: resta visibile il risultato dell’analisi precedente.' : ''), 'error');
+        outcomeTarget = analysisError('Analisi non completata. ' + message + (state.analysis ? ' Resta disponibile il risultato precedente.' : ' Nessun risultato è stato acquisito.'), origin);
       }
-    } finally { state.controller = null; setBusy(false); }
+    } finally {
+      state.controller = null; setBusy(false);
+      // Follow the explicit submission, without interrupting someone who moved on to another field.
+      const active = document.activeElement;
+      if (!active || active === document.body || active === $('busy-title') || active.disabled) focusFeedback(outcomeTarget);
+    }
   }
   $('analysis-form').addEventListener('submit', e => { e.preventDefault(); analyse(); });
   $('questions-form').addEventListener('submit', e => {
     e.preventDefault();
     $('questions').querySelectorAll('textarea').forEach(input => { const answer = input.value.trim(); if (answer) state.answers.set(input.dataset.question, answer); else state.answers.delete(input.dataset.question); });
-    analyse();
+    analyse('questions');
   });
   function addText(parent, tag, text, cls) { if (text) parent.append(make(tag, text, cls)); }
   async function createCrop(bbox, image, id) {
@@ -102,6 +141,9 @@
   }
   function validUrl(url) { try { const parsed = new URL(url); return parsed.protocol === 'https:' ? parsed.href : null; } catch { return null; } }
   async function renderAnalysis(analysis) {
+    // Build off-screen: a rendering failure must not overwrite the previous valid report.
+    const draft = document.getElementById('report').cloneNode(true);
+    const $ = id => id === 'preview' ? document.getElementById(id) : draft.querySelector('#' + id);
     $('summary').textContent = analysis.summary || '';
     const hasUnknown = Boolean(analysis.needs_clarification) || analysis.findings.some(f => f.critical_unknown || f.risk === 'undetermined') || (analysis.questions || []).some(q => q.critical);
     $('assessment-state').textContent = hasUnknown ? 'Valutazione da completare · restano informazioni decisive da verificare.' : 'Osservazioni e misure proposte · da confermare nelle condizioni effettive.';
@@ -155,6 +197,11 @@
     const meta = analysis.meta || {}, parts = [];
     if (meta.method_version || meta.prompt_version) parts.push('Metodo: ' + (meta.method_version || meta.prompt_version)); if (meta.model) parts.push('Modello: ' + meta.model); if (meta.created_at) parts.push('Analisi: ' + meta.created_at);
     $('analysis-meta').textContent = parts.join(' · ');
+    ['summary', 'assessment-state', 'findings', 'questions', 'print-questions', 'limitations', 'sources', 'analysis-meta'].forEach(id => {
+      const target = document.getElementById(id), content = $(id);
+      target.replaceChildren(...content.childNodes); target.className = content.className;
+    });
+    document.getElementById('questions-panel').hidden = $('questions-panel').hidden;
   }
   $('export-json').addEventListener('click', () => {
     if (!state.analysis) return;

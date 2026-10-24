@@ -59,8 +59,10 @@ documentata delle misure. Non usarlo come archivio aziendale.
 Installa requirements-dev.txt ed esegui:
 python -m pytest -q
 node --check static/app.js
+node --test tests/test_ui_feedback.cjs
 
 I test software simulano il fornitore e non dimostrano la qualità SLPS del modello.
+I test Node del feedback usano un DOM simulato, senza dipendenze npm: non sono una prova visiva nel browser.
 La prova reale con API, la verifica grafica nel browser e la configurazione dell'hosting
 restano necessarie. Non è stata pubblicata una nuova versione online.
 
@@ -69,7 +71,7 @@ restano necessarie. Non è stata pubblicata una nuova versione online.
 2. Fonti normative controllate e tracciabili, con verifica di pertinenza.
 3. Casi persistenti, assegnazione delle misure, evidenze e conferma della chiusura.
 4. Separazione fra aziende, cancellazione e backup/ripristino verificati.
-5. Casi di accettazione definiti da Morgan, inclusi alcuni casi reali non usati per modificare il metodo.
+5. Casi di accettazione definiti dal responsabile SLPS, inclusi alcuni casi reali non usati per modificare il metodo.
 6. Prezzo sulla base di costi misurati, condizioni, informativa e assistenza.
 7. Prova con pochi clienti prima di ampliare l'accesso.
 
