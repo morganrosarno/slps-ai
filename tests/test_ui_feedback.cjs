@@ -11,8 +11,9 @@ const script = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const template = fs.readFileSync(path.join(root, 'templates/index.html'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture({ reducedMotion = false, imageAvailable = false } = {}) {
-  const elements = new Map(), requests = [], scrolls = [], exports = [], prints = [];
+async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseListStatus = 200, sessionResponses = [], deferHistory = false } = {}) {
+  const elements = new Map(), requests = [], historyGets = [], scrolls = [], exports = [], prints = [];
+  let currentCases = [...initialCases];
   let doc;
   class Element {
     constructor(tag = 'div', id = '') { this.tagName = tag.toUpperCase(); this.id = id; this.hidden = false; this.disabled = false; this.value = ''; this.textContent = ''; this.className = ''; this.dataset = {}; this.attrs = {}; this.childNodes = []; this.handlers = {}; this.files = []; }
@@ -24,10 +25,10 @@ async function fixture({ reducedMotion = false, imageAvailable = false } = {}) {
     append(...children) { this.childNodes.push(...children); }
     replaceChildren(...children) { this.childNodes = children; }
     focus() { doc.activeElement = this; }
-    click() {}
-    remove() {}
+    click() { if (this.handlers.click) return this.handlers.click(); }
+    remove() { this.hidden = true; }
     scrollIntoView(options) { scrolls.push({ id: this.id, ...options }); }
-    querySelectorAll(selector) { return this.childNodes.flatMap(child => child instanceof Element ? [...(child.tagName.toLowerCase() === selector ? [child] : []), ...child.querySelectorAll(selector)] : []); }
+    querySelectorAll(selector) { const matches = child => selector.startsWith('.') ? child.className.split(/\s+/).includes(selector.slice(1)) : child.tagName.toLowerCase() === selector; return this.childNodes.flatMap(child => child instanceof Element ? [...(matches(child) ? [child] : []), ...child.querySelectorAll(selector)] : []); }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
     cloneNode() { const copy = new Element(this.tagName, this.id); Object.assign(copy, this); copy.childNodes = this.childNodes.map(child => child instanceof Element ? child.cloneNode(true) : child); copy.handlers = {}; return copy; }
     async decode() { if (!imageAvailable) throw new Error('No bitmap in this DOM fixture'); }
@@ -46,14 +47,30 @@ async function fixture({ reducedMotion = false, imageAvailable = false } = {}) {
   };
   doc = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => text, body: new Element('body'), activeElement: null };
   const session = { authenticated: true, configured: true, csrf: 'test-csrf' };
+  let sessionReadCount = 0;
   const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
   const context = { document: doc, window: { matchMedia: () => ({ matches: reducedMotion }), print() { prints.push(true); } }, URL: class extends URL { static createObjectURL(value) { if (value instanceof Blob) exports.push(value); return 'blob:test-photo'; } static revokeObjectURL() {} }, Blob, AbortController, FormData: class { append() {} }, setTimeout: callback => { callback(); }, console,
-    fetch: async url => url === '/api/session' ? response(session) : new Promise(resolve => requests.push({ url, resolve: (data, status) => resolve(response(data, status)) })) };
+    fetch: async (url, options = {}) => {
+      if (url === '/api/session') {
+        if (sessionReadCount++ === 0) return response(session);
+        const next = sessionResponses.shift(); return next ? response(next.data, next.status || 200) : response(session);
+      }
+      if (url === '/api/cases' && (!options.method || options.method === 'GET')) {
+        if (deferHistory) return new Promise(resolve => historyGets.push({ url, options, resolve: () => resolve(response({ cases: currentCases })) }));
+        historyGets.push({ url, options }); return caseListStatus < 400 ? response({ cases: currentCases }) : response({ error: { message: 'Archivio temporaneamente non disponibile' } }, caseListStatus);
+      }
+      return new Promise(resolve => requests.push({ url, options, resolve: (data, status) => resolve(response(data, status)) }));
+    } };
   vm.runInNewContext(script, context, { filename: 'static/app.js' }); await tick();
   function photo(name = 'sample.jpg') { $('photo').files = [{ name, type: 'image/jpeg', size: 100 }]; $('photo').handlers.change(); }
   async function submit(origin = 'analysis') { $(origin + '-form').handlers.submit({ preventDefault() {} }); await tick(); }
-  async function finish(data, status = 200) { const request = requests.shift(); assert.equal(request.url, '/analizza'); request.resolve(data, status); await tick(); await tick(); }
-  return { $, doc, photo, submit, finish, requests, scrolls, exports, prints, session, Element };
+  async function finishRequest(expectedUrl, data, status = 200) {
+    const request = requests.shift(); assert.equal(request.url, expectedUrl);
+    if (request.options.method === 'DELETE' && status < 400 && data.deleted) currentCases = currentCases.filter(item => '/api/cases/' + encodeURIComponent(item.id) !== expectedUrl);
+    request.resolve(data, status); await tick(); await tick();
+  }
+  async function finish(data, status = 200) { await finishRequest('/analizza', data, status); }
+  return { $, doc, photo, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, session, Element };
 }
 const report = (summary = 'Valid report') => ({ findings: [], questions: [], sources: [], summary });
 
@@ -210,4 +227,264 @@ test('changing the case while its printable image is decoding prevents a stale p
   f.photo('new-case.jpg'); finishDecoding(); await printing;
   assert.equal(f.prints.length, 0); assert.equal(f.$('case-summary').childNodes.length, 0);
   assert.equal(f.$('print-report').disabled, true);
+});
+
+test('authenticated case history exposes loading, empty and readable saved-case cards', async () => {
+  const cases = [
+    { id: 'case-one', created_at: 1792920000, summary: 'Passaggio da proteggere', context: 'Area logistica durante la movimentazione' },
+    { id: 'case-two', created_at: 1792910000, summary: '', context: '' },
+  ];
+  const f = await fixture({ initialCases: cases }); await tick();
+  assert.equal(f.$('history-loading').hidden, true); assert.equal(f.$('history-empty').hidden, true);
+  assert.equal(f.$('history-panel').attrs['aria-busy'], 'false');
+  assert.equal(f.historyGets[0].options.headers['X-CSRF-Token'], f.session.csrf);
+  assert.equal(f.$('history-list').childNodes.length, 2);
+  assert.match(f.$('history-list').childNodes[0].textContent, /Passaggio da proteggere.*Area logistica/);
+  assert.match(f.$('history-list').childNodes[1].textContent, /Analisi senza sintesi/);
+  assert.match(f.$('history-status').textContent, /2 analisi salvate/);
+
+  const empty = await fixture(); await tick();
+  assert.equal(empty.$('history-empty').hidden, false); assert.match(empty.$('history-status').textContent, /Nessuna analisi/);
+  empty.$('refresh-history').click(); await tick(); assert.equal(empty.doc.activeElement.id, 'history-empty');
+});
+
+test('case history failure is explicit and receives focus after a manual retry', async () => {
+  const f = await fixture({ caseListStatus: 503 }); await tick();
+  assert.equal(f.$('history-loading').hidden, true); assert.equal(f.$('history-error').hidden, false);
+  assert.match(f.$('history-error').textContent, /Archivio non disponibile.*temporaneamente/);
+  f.$('refresh-history').click(); await tick(); assert.equal(f.doc.activeElement.id, 'history-error');
+  assert.match(f.$('history-status').textContent, /Impossibile caricare/);
+});
+
+test('an expired session while listing cases returns to login without retrying', async () => {
+  const f = await fixture({ caseListStatus: 401 }); await tick();
+  assert.equal(f.$('workspace').hidden, true); assert.equal(f.$('login-panel').hidden, false);
+  assert.equal(f.doc.activeElement.id, 'status'); assert.match(f.$('status').textContent, /Sessione scaduta.*accedi nuovamente/i);
+  assert.equal(f.historyGets.length, 1); assert.equal(f.requests.length, 0);
+});
+
+test('opening a saved case renders its report without inventing a stored photograph', async () => {
+  const saved = { id: 'saved-case', created_at: 1792920000, summary: 'Sintesi archivio', context: 'Contesto archiviato' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  const open = f.$('history-list').querySelectorAll('button')[0]; open.click(); await tick();
+  assert.equal(open.disabled, true); assert.match(f.$('history-status').textContent, /Apertura/);
+  assert.equal(f.requests[0].options.headers['X-CSRF-Token'], f.session.csrf);
+  await f.finishRequest('/api/cases/saved-case', { case: { ...saved, analysis: { ...report('Rapporto riaperto'), findings: [finding('S1')] } } });
+  assert.equal(f.$('report').hidden, false); assert.equal(f.$('report-title').textContent, 'Analisi salvata');
+  assert.equal(f.doc.activeElement.id, 'report-title'); assert.match(f.$('case-summary').textContent, /Fotografia non conservata.*Contesto archiviato/);
+  assert.match(f.$('report-notice').textContent, /fotografia non è conservata/);
+  const fallback = f.$('findings').childNodes[0].querySelector('.crop-fallback');
+  assert.equal(fallback.querySelector('a'), null); assert.match(fallback.textContent, /foto originale/);
+});
+
+test('a malformed saved case cannot replace the current report or selected photograph', async () => {
+  const saved = { id: 'broken-case', created_at: 1792920000, summary: 'Caso corrotto', context: '' };
+  const f = await fixture({ initialCases: [saved], imageAvailable: true }); await tick();
+  f.photo(); await f.submit(); await f.finish({ analysis: report('Rapporto corrente') });
+  const photo = f.$('case-summary').querySelector('img');
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/broken-case', { case: { ...saved, analysis: { ...report('Non valido'), findings: [null] } } });
+  assert.equal(f.$('summary').textContent, 'Rapporto corrente'); assert.equal(f.$('case-summary').querySelector('img'), photo);
+  assert.equal(f.$('preview-wrap').hidden, false); assert.equal(f.$('history-error').hidden, false);
+  assert.equal(f.doc.activeElement.id, 'history-error');
+});
+
+test('an expired session while opening a case preserves the local report and does not loop', async () => {
+  const saved = { id: 'expired-open', created_at: 1792920000, summary: 'Caso', context: '' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  f.photo(); await f.submit(); await f.finish({ analysis: report('Rapporto locale') });
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/expired-open', { error: { message: 'Sessione scaduta' } }, 401);
+  assert.equal(f.$('workspace').hidden, true); assert.equal(f.$('login-panel').hidden, false);
+  assert.equal(f.$('summary').textContent, 'Rapporto locale'); assert.equal(f.$('report').hidden, false);
+  assert.equal(f.doc.activeElement.id, 'status'); assert.equal(f.requests.length, 0);
+});
+
+test('case 401 refreshes session CSRF and the next login uses the new token without losing the report', async () => {
+  const saved = { id: 'refresh-login', created_at: 1792920000, summary: 'Caso', context: '' };
+  const f = await fixture({
+    initialCases: [saved],
+    sessionResponses: [
+      { data: { authenticated: false, configured: false, csrf: 'fresh-csrf', auth_configured: true } },
+      { data: { authenticated: true, configured: true, csrf: 'logged-in-csrf', auth_configured: true } },
+    ],
+  }); await tick();
+  f.photo(); await f.submit(); await f.finish({ analysis: report('Rapporto da conservare') });
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/refresh-login', { error: { message: 'Sessione scaduta' } }, 401);
+  assert.equal(f.$('login-panel').hidden, false); assert.equal(f.$('login-button').disabled, false);
+  assert.match(f.$('status').textContent, /Accedi nuovamente/); assert.equal(f.$('summary').textContent, 'Rapporto da conservare');
+
+  f.$('password').value = 'password'; f.$('login-form').handlers.submit({ preventDefault() {} }); await tick();
+  assert.equal(f.requests[0].url, '/api/login'); assert.equal(f.requests[0].options.headers['X-CSRF-Token'], 'fresh-csrf');
+  await f.finishRequest('/api/login', { authenticated: true, csrf: 'ignored-post-token' });
+  assert.equal(f.$('workspace').hidden, false); assert.equal(f.$('login-panel').hidden, true);
+  assert.equal(f.$('summary').textContent, 'Rapporto da conservare'); assert.equal(f.$('report').hidden, false);
+});
+
+test('failed session refresh disables login and explains that a reload is required', async () => {
+  const saved = { id: 'refresh-fails', created_at: 1792920000, summary: 'Caso', context: '' };
+  const f = await fixture({ initialCases: [saved], sessionResponses: [{ data: { error: { message: 'Servizio non disponibile' } }, status: 503 }] }); await tick();
+  f.photo(); await f.submit(); await f.finish({ analysis: report('Rapporto locale') });
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/refresh-fails', { error: { message: 'Sessione scaduta' } }, 401);
+  assert.equal(f.$('login-panel').hidden, false); assert.equal(f.$('login-button').disabled, true);
+  assert.equal(f.$('summary').textContent, 'Rapporto locale'); assert.equal(f.$('report').hidden, false);
+  assert.equal(f.doc.activeElement.id, 'status'); assert.match(f.$('status').textContent, /Ricarica la pagina.*verrà perso/i);
+  assert.equal(f.requests.length, 0);
+});
+
+test('deleting a saved case requires inline confirmation and clears an opened report', async () => {
+  const saved = { id: 'delete-me', created_at: 1792920000, summary: 'Caso da eliminare', context: '' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  const card = f.$('history-list').childNodes[0], buttons = card.querySelectorAll('button');
+  buttons[0].click(); await tick();
+  await f.finishRequest('/api/cases/delete-me', { case: { ...saved, analysis: report('Aperto') } });
+  assert.equal(f.$('report').hidden, false);
+
+  const remove = card.querySelectorAll('button')[1]; remove.click();
+  assert.equal(f.requests.length, 0); assert.equal(remove.hidden, true);
+  const confirm = card.querySelector('.delete-confirm'), yes = confirm.querySelectorAll('button')[0];
+  assert.equal(f.doc.activeElement, yes); yes.click(); await tick();
+  assert.equal(f.requests[0].options.method, 'DELETE');
+  await f.finishRequest('/api/cases/delete-me', { deleted: true });
+  assert.equal(f.$('history-empty').hidden, false); assert.match(f.$('history-status').textContent, /eliminata definitivamente/);
+  assert.equal(f.$('report').hidden, true); assert.equal(f.$('empty-state').hidden, false); assert.equal(f.doc.activeElement.id, 'history-title');
+});
+
+test('a failed delete restores its confirmation command', async () => {
+  const saved = { id: 'delete-fails', created_at: 1792920000, summary: 'Caso', context: '' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  const card = f.$('history-list').childNodes[0], remove = card.querySelectorAll('button')[1]; remove.click();
+  const yes = card.querySelector('.delete-confirm').querySelectorAll('button')[0]; yes.click(); await tick();
+  assert.equal(yes.textContent, 'Eliminazione…');
+  await f.finishRequest('/api/cases/delete-fails', { error: { message: 'Errore archivio' } }, 503);
+  assert.equal(yes.textContent, 'Conferma eliminazione'); assert.equal(yes.disabled, false);
+  assert.equal(f.$('history-error').hidden, false); assert.equal(f.doc.activeElement.id, 'history-error');
+});
+
+test('an expired session while deleting returns to login and preserves the local report', async () => {
+  const saved = { id: 'expired-delete', created_at: 1792920000, summary: 'Caso', context: '' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  f.photo(); await f.submit(); await f.finish({ analysis: report('Rapporto locale') });
+  const card = f.$('history-list').childNodes[0], remove = card.querySelectorAll('button')[1]; remove.click();
+  const yes = card.querySelector('.delete-confirm').querySelectorAll('button')[0]; yes.click(); await tick();
+  await f.finishRequest('/api/cases/expired-delete', { error: { message: 'Sessione scaduta' } }, 401);
+  assert.equal(f.$('workspace').hidden, true); assert.equal(f.$('login-panel').hidden, false);
+  assert.equal(f.$('summary').textContent, 'Rapporto locale'); assert.equal(f.$('report').hidden, false);
+  assert.equal(yes.textContent, 'Conferma eliminazione'); assert.equal(f.doc.activeElement.id, 'status'); assert.equal(f.requests.length, 0);
+});
+
+test('workspace navigation preserves a photo and context without issuing an analysis request', async () => {
+  const f = await fixture();
+  assert.equal(f.$('history-panel').hidden, true); assert.equal(f.$('work-grid').hidden, false);
+  assert.equal(f.$('workspace-nav').hidden, false); assert.equal(f.$('step-photo').attrs['aria-current'], 'step');
+  f.photo(); f.$('context').value = 'Contesto ancora da inviare';
+  assert.equal(f.$('step-context').attrs['aria-current'], 'step');
+  f.$('nav-history').click();
+  assert.equal(f.$('history-panel').hidden, false); assert.equal(f.$('work-grid').hidden, true);
+  assert.equal(f.doc.activeElement.id, 'history-title'); assert.equal(f.$('workflow').hidden, true);
+  f.$('nav-analysis').click();
+  assert.equal(f.doc.activeElement.id, 'input-title'); assert.equal(f.$('preview-wrap').hidden, false);
+  assert.equal(f.$('context').value, 'Contesto ancora da inviare'); assert.equal(f.requests.length, 0);
+});
+
+test('the completed report has a focused view and editing preserves it after a failed request', async () => {
+  const f = await fixture(); f.photo(); f.$('context').value = 'Prima versione'; await f.submit();
+  await f.finish({ analysis: report('Rapporto valido') });
+  assert.equal(f.$('input-panel').hidden, true); assert.equal(f.$('work-grid').dataset.mode, 'report');
+  assert.equal(f.$('step-result').attrs['aria-current'], 'step');
+  f.$('edit-analysis').click();
+  assert.equal(f.$('input-panel').hidden, false); assert.equal(f.doc.activeElement.id, 'input-title');
+  assert.equal(f.$('return-report').hidden, false); assert.equal(f.$('context').value, 'Prima versione');
+  f.$('context').value = 'Seconda versione'; await f.submit();
+  await f.finish({ error: { message: 'Servizio temporaneamente non disponibile' } }, 503);
+  assert.equal(f.$('input-panel').hidden, false); assert.equal(f.$('analysis-feedback').hidden, false);
+  assert.equal(f.doc.activeElement.id, 'analysis-feedback'); assert.equal(f.$('summary').textContent, 'Rapporto valido');
+  f.$('return-report').click();
+  assert.equal(f.$('input-panel').hidden, true); assert.equal(f.doc.activeElement.id, 'report-title');
+  f.$('edit-analysis').click(); assert.equal(f.$('context').value, 'Seconda versione');
+});
+
+test('new analysis clears the current draft and answers without deleting any saved report', async () => {
+  const saved = { id: 'keep-saved', created_at: 1792920000, summary: 'Rapporto da conservare', context: '' };
+  const f = await fixture({ initialCases: [saved] }); f.photo(); f.$('context').value = 'Contesto'; await f.submit();
+  await f.finish({ analysis: { ...report(), questions: [{ text: 'Il riparo è presente?', critical: true }] } });
+  f.$('questions').querySelector('textarea').value = 'Sì';
+  f.$('nav-history').click(); f.$('new-analysis').click();
+  assert.equal(f.requests.length, 0); assert.equal(f.$('history-list').childNodes.length, 1);
+  assert.equal(f.$('history-panel').hidden, true); assert.equal(f.$('input-panel').hidden, false);
+  assert.equal(f.$('context').value, ''); assert.equal(f.$('photo').value, '');
+  assert.equal(f.$('preview-wrap').hidden, true); assert.equal(f.$('report').hidden, true);
+  assert.equal(f.$('questions').childNodes.length, 0); assert.equal(f.$('export-json').disabled, true);
+  assert.equal(f.$('step-photo').attrs['aria-current'], 'step'); assert.equal(f.doc.activeElement.id, 'input-title');
+  await f.submit(); assert.equal(f.requests.length, 0); assert.match(f.$('analysis-feedback').textContent, /Seleziona una fotografia/);
+});
+
+test('navigation and new analysis cannot discard an in-flight analysis', async () => {
+  const f = await fixture(); f.photo(); f.$('context').value = 'Attività in corso'; await f.submit();
+  for (const id of ['new-analysis', 'history-new-analysis', 'nav-history', 'nav-analysis', 'edit-analysis']) assert.equal(f.$(id).disabled, true);
+  f.$('new-analysis').click(); f.$('nav-history').click();
+  assert.equal(f.$('history-panel').hidden, true); assert.equal(f.$('context').value, 'Attività in corso');
+  assert.equal(f.$('input-panel').hidden, true); assert.equal(f.$('busy-state').hidden, false);
+  await f.finish({ analysis: report('Risultato ricevuto') });
+  assert.equal(f.$('new-analysis').disabled, false); assert.equal(f.$('nav-history').disabled, false);
+  assert.equal(f.$('summary').textContent, 'Risultato ricevuto'); assert.equal(f.$('report').hidden, false);
+});
+
+test('opening an archived report restores its context for editing and requires a new photo', async () => {
+  const saved = { id: 'archived-edit', created_at: 1792920000, summary: 'Rapporto salvato', context: 'Contesto del rapporto salvato' };
+  const f = await fixture({ initialCases: [saved] }); f.photo(); f.$('context').value = 'Un altro contesto';
+  f.$('nav-history').click(); f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/archived-edit', { case: { ...saved, analysis: report('Analisi archiviata') } });
+  assert.equal(f.$('history-panel').hidden, true); assert.equal(f.$('input-panel').hidden, true);
+  f.$('edit-analysis').click();
+  assert.equal(f.$('context').value, saved.context); assert.equal(f.$('preview-wrap').hidden, true);
+  await f.submit(); assert.equal(f.requests.length, 0); assert.match(f.$('analysis-feedback').textContent, /Seleziona una fotografia/);
+  assert.equal(f.$('summary').textContent, 'Analisi archiviata');
+});
+
+test('an archived finding never crops the photograph from the previously opened local report', async () => {
+  const saved = { id: 'different-photo', created_at: 1792920000, summary: 'Altra situazione', context: '' };
+  const f = await fixture({ imageAvailable: true, initialCases: [saved] }); f.photo(); await f.submit();
+  await f.finish({ analysis: { ...report('Rapporto locale'), findings: [finding('L1')] } });
+  assert.equal(f.$('findings').querySelectorAll('canvas').length, 1);
+  f.$('nav-history').click(); f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/different-photo', { case: { ...saved, analysis: { ...report('Rapporto archiviato'), findings: [finding('A1')] } } });
+  assert.equal(f.$('findings').querySelectorAll('canvas').length, 0);
+  assert.equal(f.$('case-summary').querySelector('img'), null);
+  assert.match(f.$('findings').querySelector('.crop-fallback').textContent, /Ritaglio non disponibile.*foto originale/);
+});
+
+test('a slow archive list does not block navigation or starting a new analysis', async () => {
+  const f = await fixture({ deferHistory: true });
+  assert.equal(f.$('history-loading').hidden, false);
+  assert.equal(f.$('new-analysis').disabled, false); assert.equal(f.$('nav-history').disabled, false);
+  f.$('nav-history').click(); assert.equal(f.$('history-panel').hidden, false);
+  f.$('new-analysis').click(); assert.equal(f.$('input-panel').hidden, false);
+  f.photo(); f.$('context').value = 'Nuova situazione'; await f.submit();
+  await f.finish({ analysis: report('Analisi disponibile') });
+  assert.equal(f.$('edit-analysis').disabled, false); assert.equal(f.$('summary').textContent, 'Analisi disponibile');
+  f.historyGets[0].resolve(); await tick();
+  assert.equal(f.$('summary').textContent, 'Analisi disponibile'); assert.equal(f.$('report').hidden, false);
+});
+
+test('an archived report asks for its photo before answers and preserves questions when it is attached', async () => {
+  const saved = { id: 'photo-first', created_at: 1792920000, summary: 'Caso archiviato', context: 'Contesto originale' };
+  const f = await fixture({ initialCases: [saved] }); f.$('nav-history').click();
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/photo-first', { case: { ...saved, analysis: { ...report('Rapporto originale'), questions: [{ text: 'Il riparo è fisso?', critical: true }] } } });
+  const answer = f.$('questions').querySelector('textarea');
+  assert.equal(answer.disabled, true); assert.equal(f.$('questions-photo-note').hidden, false);
+  assert.equal(f.$('reanalyse-button').textContent, 'Aggiungi la foto per aggiornare');
+  await f.submit('questions');
+  assert.equal(f.requests.length, 0); assert.equal(f.doc.activeElement.id, 'input-title');
+  f.photo('original.jpg');
+  assert.equal(f.$('summary').textContent, 'Rapporto originale'); assert.equal(f.$('questions').querySelector('textarea'), answer);
+  assert.equal(answer.disabled, false); assert.equal(f.$('questions-photo-note').hidden, true);
+  assert.equal(f.$('context').value, saved.context); assert.match(f.$('report-notice').textContent, /non è ancora cambiato/);
+  answer.value = 'Sì, fissato'; await f.submit('questions');
+  await f.finish({ analysis: report('Rapporto aggiornato') });
+  assert.match(f.$('case-summary').textContent, /Contesto originale.*Chiarimenti/s);
+  assert.match(f.$('case-summary').textContent, /Il riparo è fisso\?\nRisposta: Sì, fissato/);
 });

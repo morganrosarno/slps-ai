@@ -1,5 +1,5 @@
 # SLPS AI — pilota privato
-Stato del 23 ottobre 2026. Base recuperata: commit 1006d83. Metodo approvato: 1.8.
+Stato del 25 ottobre 2026. Base recuperata: commit 1006d83. Metodo approvato: 1.8.
 
 Questa versione prepara una prova riservata al proprietario. Non è ancora il servizio commerciale multi-azienda.
 
@@ -12,6 +12,8 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 - Upload solo in memoria, controllo del contenuto, 10 MB e 25 megapixel, rimozione dei metadati.
 - Archivio SQLite dei risultati, senza fotografia, sempre filtrato per azienda e proprietario.
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
+- Sito di presentazione su `/` e interfaccia autenticata su `/app/`, nello stesso servizio.
+- Navigazione tra nuova analisi e archivio, passaggi foto/contesto/risultato e rapporto operativo.
 
 ## Avvio locale
 Python 3.12 verificato durante lo sviluppo.
@@ -46,7 +48,8 @@ Questo controllo non dimostra da solo la pertinenza o correttezza legale dei tes
 ## Dati e limiti
 Le foto non vengono conservate sul server. Il risultato strutturato e il contesto fornito
 vengono archiviati in SQLite per l'azienda e il proprietario configurati.
-Sono disponibili API autenticate per elencare, leggere ed eliminare i propri casi.
+L’interfaccia autenticata consente di elencare, aprire ed eliminare con conferma i propri casi;
+usa le API già filtrate per azienda e proprietario.
 Un identificativo di caso non consente da solo l'accesso: ogni operazione applica anche
 il filtro su azienda e proprietario.
 
@@ -85,11 +88,13 @@ restano necessarie. Non è stata pubblicata una nuova versione online.
 La procedura di configurazione, controllo offline e ripristino del pilota è in
 `docs/PILOT_DEPLOY.md`. Il preflight non contatta il fornitore AI e non prova
 credito, disponibilità del modello o persistenza effettiva del volume.
+Il collaudo della versione reale è definito in `docs/STAGING_ACCEPTANCE.md`.
+Le viste e i test con dati sintetici non soddisfano la verifica del motore AI reale.
 
 ## Prima del rilascio commerciale
 1. Prova completa con API attiva e modello scelto: foto → analisi → chiarimento → riesame.
 2. Fonti normative controllate e tracciabili, con verifica di pertinenza.
-3. Interfaccia cronologia, assegnazione delle misure, evidenze e conferma della chiusura.
+3. Collaudo della cronologia; assegnazione delle misure, evidenze e conferma della chiusura.
 4. Gestione account, cancellazione e backup/ripristino verificati sull'hosting.
 5. Casi di accettazione definiti dal responsabile SLPS, inclusi alcuni casi reali non usati per modificare il metodo.
 6. Prezzo sulla base di costi misurati, condizioni, informativa e assistenza.

@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 MASTER_SHA256 = "88a1077d86f78ee1102031739a5a1d1fcfb3750f2aa81639af528b7db8da97b7"
 EXPECTED_START = "gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --threads 1 --timeout 120"
+PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,18 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
                          "Credenziale del fornitore AI presente.", "Credenziale del fornitore AI assente."))
     results.append(check("model", bool(env.get("OPENAI_MODEL", "").strip()),
                          "Modello AI selezionato esplicitamente.", "Modello AI non selezionato."))
+    results.append(Check("provider_verification", "warning", "warning",
+                         "Controllo offline: autenticazione del fornitore, credito e disponibilità del modello non verificati."))
+
+    for check_id, variable, default, label in (
+        ("tenant_id", "SLPS_PILOT_TENANT_ID", "pilot", "azienda"),
+        ("owner_id", "SLPS_PILOT_OWNER_ID", "owner", "proprietario"),
+    ):
+        principal = env.get(variable, default)
+        valid = isinstance(principal, str) and PRINCIPAL_ID.fullmatch(principal) is not None
+        results.append(check(check_id, valid,
+                             f"Identificativo {label} valido per accesso e archivio.",
+                             f"{variable} deve contenere da 1 a 64 caratteri ASCII: lettere, numeri, punto, trattino o underscore."))
 
     master_setting = env.get("SLPS_PROMPT_PATH", "").strip()
     master_path = Path(master_setting) if master_setting else root / "private/SLPS_AI_Prompt_Master_v1.8.txt"
@@ -113,21 +127,31 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
     results.append(check("analysis_limit", rate_ok, "Limite orario delle analisi valido.",
                          "SLPS_ANALYSES_PER_HOUR deve essere un intero tra 1 e 100."))
 
-    rate_path_setting = env.get("SLPS_RATE_DB_PATH", "").strip()
-    if not rate_path_setting:
-        results.append(Check("rate_path", "warning", "warning",
-                             "Percorso dell'archivio dei limiti non configurato."))
-        results.append(Check("rate_volume", "warning", "warning",
-                             "Persistenza dei contatori non verificabile: possono azzerarsi al riavvio o al deploy."))
-    else:
-        rate_path = Path(rate_path_setting)
-        unsafe = (not rate_path.is_absolute() or str(rate_path).startswith("/tmp/")
-                  or root == rate_path or root in rate_path.parents)
-        results.append(check("rate_path", not unsafe,
-                             "Percorso assoluto esterno al codice configurato per i limiti.",
-                             "SLPS_RATE_DB_PATH deve essere assoluto, esterno al codice e non temporaneo."))
-        results.append(Check("rate_volume", "warning", "warning",
-                             "Percorso configurato; il montaggio su volume persistente va verificato nel provider."))
+    for check_id, variable, label in (
+        ("rate", "SLPS_RATE_DB_PATH", "dei limiti"),
+        ("case", "SLPS_CASE_DB_PATH", "dei casi"),
+    ):
+        path_setting = env.get(variable, "")
+        if not path_setting.strip():
+            results.append(Check(f"{check_id}_path", "warning", "warning",
+                                 f"Percorso dell'archivio {label} non configurato: il percorso predefinito non garantisce la persistenza."))
+        else:
+            path = Path(path_setting)
+            try:
+                resolved = path.resolve()
+                code_root = root.resolve()
+                temporary_roots = (Path("/tmp"), Path("/var/tmp"), Path("/dev/shm"))
+                unsafe = (not path.is_absolute() or code_root == resolved or code_root in resolved.parents
+                          or any(directory == resolved or directory in resolved.parents for directory in temporary_roots))
+            except (OSError, RuntimeError):
+                unsafe = True
+            results.append(check(f"{check_id}_path", not unsafe,
+                                 f"Percorso assoluto esterno al codice configurato per l'archivio {label}.",
+                                 f"{variable} deve essere assoluto, esterno al codice e non temporaneo."))
+        results.append(Check(f"{check_id}_volume", "warning", "warning",
+                             f"Controllo offline: montaggio e persistenza dell'archivio {label} dopo riavvio o deploy non verificati sul provider."))
+    results.append(Check("archive_recovery", "warning", "warning",
+                         "Controllo offline: backup e ripristino dell'archivio dei casi non verificati; richiedono una prova separata."))
 
     procfile = root / "Procfile"
     try:
@@ -144,6 +168,7 @@ def report(checks: list[Check]) -> dict:
     warnings = sum(item.status == "warning" for item in checks)
     return {
         "schema_version": 1,
+        "verification_scope": "offline_configuration_only",
         "ready": blockers == 0,
         "summary": {"blockers": blockers, "warnings": warnings, "passed": len(checks) - blockers - warnings},
         "checks": [asdict(item) for item in checks],

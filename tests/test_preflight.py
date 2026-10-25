@@ -25,6 +25,9 @@ class PreflightTests(unittest.TestCase):
             "SLPS_COOKIE_SECURE": "true",
             "SLPS_ANALYSES_PER_HOUR": "3",
             "SLPS_RATE_DB_PATH": "/var/data/limits.sqlite3",
+            "SLPS_CASE_DB_PATH": "/var/data/cases.sqlite3",
+            "SLPS_PILOT_TENANT_ID": "test-tenant_1",
+            "SLPS_PILOT_OWNER_ID": "test-owner.1",
         }
 
     def tearDown(self):
@@ -40,12 +43,61 @@ class PreflightTests(unittest.TestCase):
             self.assertTrue(data["ready"])
             self.assertGreaterEqual(data["summary"]["warnings"], 1)
             self.assertEqual(data["network_calls"], 0)
+            self.assertEqual(data["verification_scope"], "offline_configuration_only")
             checks = {item["id"]: item for item in data["checks"]}
             self.assertEqual(checks["rate_path"]["status"], "pass")
             self.assertEqual(checks["rate_volume"]["status"], "warning")
+            self.assertEqual(checks["case_path"]["status"], "pass")
+            self.assertEqual(checks["case_volume"]["status"], "warning")
+            self.assertEqual(checks["archive_recovery"]["status"], "warning")
+            self.assertEqual(checks["provider_verification"]["status"], "warning")
+            self.assertEqual(checks["tenant_id"]["status"], "pass")
+            self.assertEqual(checks["owner_id"]["status"], "pass")
             serialized = json.dumps(data)
             self.assertNotIn(env["OPENAI_API_KEY"], serialized)
             self.assertNotIn(env["SLPS_PILOT_PASSWORD"], serialized)
+            self.assertNotIn(env["SLPS_PILOT_TENANT_ID"], serialized)
+            self.assertNotIn(env["SLPS_PILOT_OWNER_ID"], serialized)
+
+    def test_archive_paths_warn_when_missing_and_block_unsafe_locations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = self.configured(root)
+            for check_id, variable in (("rate", "SLPS_RATE_DB_PATH"), ("case", "SLPS_CASE_DB_PATH")):
+                env.pop(variable)
+                checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks[f"{check_id}_path"].status, "warning")
+                self.assertEqual(checks[f"{check_id}_volume"].status, "warning")
+                for path in ("relative.sqlite3", str(root / "archive.sqlite3"), "/tmp/archive.sqlite3",
+                             "/var/tmp/archive.sqlite3", "/dev/shm/archive.sqlite3",
+                             "/var/data/../../tmp/archive.sqlite3"):
+                    with self.subTest(variable=variable, path=path):
+                        env[variable] = path
+                        checks = {item.id: item for item in preflight.run_checks(env, root)}
+                        self.assertEqual(checks[f"{check_id}_path"].status, "blocker")
+                        self.assertEqual(checks[f"{check_id}_volume"].status, "warning")
+                env[variable] = f"/var/data/{check_id}.sqlite3"
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["master.txt"])
+
+    def test_archive_principals_match_server_defaults_and_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = self.configured(root)
+            for check_id, variable in (("tenant_id", "SLPS_PILOT_TENANT_ID"), ("owner_id", "SLPS_PILOT_OWNER_ID")):
+                env.pop(variable)
+                checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks[check_id].status, "pass")
+                for value in ("a", "AZaz09_.-", "a" * 64):
+                    with self.subTest(variable=variable, value=value):
+                        env[variable] = value
+                        checks = {item.id: item for item in preflight.run_checks(env, root)}
+                        self.assertEqual(checks[check_id].status, "pass")
+                for value in ("", " ", " owner", "owner ", "owner\n", "tenant/owner", "é", "a" * 65):
+                    with self.subTest(variable=variable, value=value):
+                        env[variable] = value
+                        checks = {item.id: item for item in preflight.run_checks(env, root)}
+                        self.assertEqual(checks[check_id].status, "blocker")
+                env[variable] = "valid-principal"
 
     def test_missing_required_values_are_blockers_and_bad_rate_does_not_crash(self):
         with tempfile.TemporaryDirectory() as temporary:

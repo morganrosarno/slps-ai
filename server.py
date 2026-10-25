@@ -313,6 +313,11 @@ def create_app(test_config=None):
 
     @app.get("/")
     def home():
+        return render_template("landing.html")
+
+    @app.get("/app/")
+    @app.get("/app")
+    def workspace():
         return render_template("index.html")
 
     @app.get("/healthz")

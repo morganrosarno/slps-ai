@@ -1,10 +1,47 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { csrf: '', authenticated: false, configured: false, busy: false, file: null, imageUrl: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '' };
+  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, imageUrl: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true };
   const certaintyLabels = { visible: 'Visibile nella foto', reported: 'Riferito dall’utilizzatore', verify: 'Da verificare sul posto' };
   const riskLabels = { high: 'Rischio alto', medium: 'Rischio medio', low: 'Rischio basso', undetermined: 'Rischio da determinare' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
+  function syncWorkspace() {
+    const history = state.view === 'history', hasReport = Boolean(state.analysis);
+    $('history-panel').hidden = !history; $('work-grid').hidden = history; $('workflow').hidden = history;
+    $('workspace-nav').hidden = !state.authenticated; $('new-analysis').hidden = !state.authenticated;
+    $('nav-analysis').className = 'nav-button' + (!history ? ' active' : '');
+    $('nav-history').className = 'nav-button' + (history ? ' active' : '');
+    ['nav-analysis', 'nav-history'].forEach(id => $(id).removeAttribute('aria-current'));
+    $(history ? 'nav-history' : 'nav-analysis').setAttribute('aria-current', 'page');
+    $('workspace-title').textContent = history ? 'Le tue analisi, in un solo posto.' : hasReport && !state.editing ? 'Dalla situazione, alle azioni.' : 'Analizza una situazione di lavoro.';
+    $('workspace-description').textContent = history ? 'Riapri un rapporto, consulta il contesto ed esporta ciò che vuoi conservare.' : hasReport && !state.editing ? 'Verifica le misure proposte e completa le informazioni che mancano.' : 'Inizia da una foto. Aggiungi il contesto. Individua il prossimo passo.';
+    $('work-grid').dataset.mode = state.busy ? 'busy' : hasReport ? state.editing ? 'edit-report' : 'report' : 'input';
+    $('input-panel').hidden = state.busy || (hasReport && !state.editing);
+    $('input-panel').className = 'panel input-panel' + (state.file ? ' has-photo' : '');
+    $('return-report').hidden = !hasReport || !state.editing;
+    $('upload-title').textContent = state.file ? 'Vuoi cambiare fotografia?' : 'Carica una fotografia';
+    $('submit-note').textContent = hasReport ? 'Il rapporto corrente cambia solo dopo una nuova analisi riuscita.' : 'Controlla foto e contesto prima di avviare.';
+    const activeStep = state.busy || (hasReport && !state.editing) ? 2 : state.file ? 1 : 0;
+    ['step-photo', 'step-context', 'step-result'].forEach((id, index) => {
+      $(id).className = 'workflow-step' + (index < activeStep ? ' complete' : index === activeStep ? ' current' : '');
+      $(id).removeAttribute('aria-current'); if (index === activeStep) $(id).setAttribute('aria-current', 'step');
+    });
+    $('result-step-note').textContent = state.busy ? 'Analisi in corso' : hasReport ? 'Rapporto disponibile' : 'Azioni e chiarimenti';
+    const needsArchivedPhoto = Boolean(state.analysis && !state.file);
+    $('questions-photo-note').hidden = !needsArchivedPhoto;
+    $('questions').querySelectorAll('textarea').forEach(input => { input.disabled = state.busy || needsArchivedPhoto; });
+  }
+  function showView(view, focus = false) {
+    state.view = view; syncWorkspace();
+    if (focus) focusFeedback(view === 'history' ? 'history-title' : state.analysis && !state.editing ? 'report-title' : 'input-title');
+  }
+  function newAnalysis() {
+    if (state.busy || state.caseBusy) return;
+    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
+    state.file = null; state.imageUrl = null; $('photo').value = ''; $('context').value = '';
+    $('preview-wrap').hidden = true; $('preview').removeAttribute('src'); $('file-name').textContent = '';
+    clearAnalysis(); notice(''); showView('analysis', true);
+  }
   function notice(text, kind = '') { $('status').textContent = text; $('status').className = 'notice' + (kind ? ' ' + kind : ''); $('status').hidden = !text; }
   function focusFeedback(id) {
     const target = $(id);
@@ -33,30 +70,155 @@
     return data;
   }
   function applySession(data) {
+    const wasAuthenticated = state.authenticated;
     state.authenticated = Boolean(data.authenticated); state.csrf = data.csrf || ''; state.configured = Boolean(data.configured);
     $('login-panel').hidden = state.authenticated; $('workspace').hidden = !state.authenticated; $('logout').hidden = !state.authenticated;
     $('login-button').disabled = data.auth_configured === false;
     if (!state.authenticated && data.auth_configured === false) notice('L’accesso al pilota non è ancora configurato. Completa la configurazione riservata del servizio prima di utilizzarlo.', 'warning');
     if (state.authenticated && !state.configured) notice('Il pilota è accessibile, ma la configurazione per l’analisi non è completa. La fotografia non verrà inviata finché il servizio non sarà configurato.', 'warning');
     updateButton();
+    if (state.authenticated && (!wasAuthenticated || !state.historyLoaded)) loadCases();
+    if (!state.authenticated) resetHistory();
   }
-  function updateButton() { $('analyse-button').disabled = state.busy || !state.configured; $('reanalyse-button').disabled = state.busy || !state.configured; $('export-json').disabled = state.busy || !state.analysis; $('print-report').disabled = state.busy || !state.analysis; }
+  function updateButton() {
+    $('analyse-button').disabled = state.busy || !state.configured; $('reanalyse-button').disabled = state.busy || !state.configured;
+    $('export-json').disabled = state.busy || !state.analysis; $('print-report').disabled = state.busy || !state.analysis;
+    ['new-analysis', 'history-new-analysis', 'nav-analysis', 'nav-history', 'edit-analysis', 'return-report'].forEach(id => { $(id).disabled = state.busy || state.caseBusy; });
+    if (!state.busy) $('reanalyse-button').textContent = state.analysis && !state.file ? 'Aggiungi la foto per aggiornare' : 'Aggiorna con le risposte';
+    syncWorkspace();
+  }
   function setBusy(value) {
     state.busy = value; updateButton(); $('photo').disabled = value; $('context').disabled = value; $('logout').disabled = value;
-    $('analyse-button').textContent = value ? 'Analisi in corso…' : 'Analizza la situazione';
-    $('reanalyse-button').textContent = value ? 'Analisi in corso…' : 'Aggiorna con le risposte';
+    $('analyse-button').textContent = value ? 'Analisi in corso…' : 'Avvia analisi AI →';
+    $('reanalyse-button').textContent = value ? 'Analisi in corso…' : state.analysis && !state.file ? 'Aggiungi la foto per aggiornare' : 'Aggiorna con le risposte';
     $('busy-state').hidden = !value; $('report').hidden = value || !state.analysis; $('empty-state').hidden = value || Boolean(state.analysis);
     $('result-region').setAttribute('aria-busy', String(value));
     $('result-region').setAttribute('aria-labelledby', value ? 'busy-title' : state.analysis ? 'report-title' : 'result-title');
   }
   function clearAnalysis() {
-    state.analysis = null; state.archive = null; state.answers.clear(); state.submittedContext = ''; clearFeedback();
+    state.analysis = null; state.archive = null; state.openedCaseId = null; state.answers.clear(); state.submittedContext = ''; state.editing = true; clearFeedback();
     $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren();
     $('case-summary').replaceChildren(); $('question-summary').replaceChildren(); $('question-summary').hidden = true;
     $('report-notice').hidden = true; $('report-title').textContent = 'Analisi completata';
     $('analysis-announcement').textContent = '';
     $('result-region').setAttribute('aria-labelledby', 'result-title'); updateButton();
   }
+  function resetHistory() {
+    state.historyBusy = false; state.caseBusy = false; state.historyLoaded = false; state.openedCaseId = null;
+    $('history-list').replaceChildren(); $('history-loading').hidden = true; $('history-empty').hidden = true; $('history-error').hidden = true;
+    $('history-status').textContent = ''; $('refresh-history').disabled = false;
+  }
+  function setHistoryBusy(value, message = '', changingCase = false) {
+    state.caseBusy = value && changingCase;
+    state.historyBusy = value; $('refresh-history').disabled = value; $('history-panel').setAttribute('aria-busy', String(value));
+    $('history-list').querySelectorAll('button').forEach(button => { button.disabled = value; });
+    if (message) $('history-status').textContent = message;
+    updateButton();
+  }
+  async function archiveSessionExpired() {
+    applySession({ authenticated: false, configured: false });
+    notice('Sessione scaduta. Sto preparando un nuovo accesso. L’eventuale rapporto già aperto resta in questa pagina.', 'warning');
+    try {
+      const fresh = await api('/api/session');
+      applySession({ ...fresh, authenticated: false, configured: false });
+      notice('Sessione scaduta. Accedi nuovamente per usare l’archivio. L’eventuale rapporto già aperto resta in questa pagina.', 'warning');
+    } catch {
+      state.csrf = ''; $('login-button').disabled = true;
+      notice('Sessione scaduta e nuovo accesso non disponibile. Ricarica la pagina prima di accedere. Il rapporto locale resta nella pagina, ma verrà perso al ricaricamento.', 'error');
+    }
+    focusFeedback('status');
+  }
+  function caseDate(value) {
+    const date = new Date(Number(value) * 1000);
+    return Number.isNaN(date.getTime()) ? 'Data non disponibile' : new Intl.DateTimeFormat('it-CH', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  }
+  function caseExcerpt(value, fallback) {
+    const text = String(value || fallback || '').trim().replace(/\s+/g, ' ');
+    return text.length > 180 ? text.slice(0, 177) + '…' : text;
+  }
+  function renderCaseList(cases) {
+    $('history-list').replaceChildren(); $('history-empty').hidden = cases.length !== 0;
+    cases.forEach(item => {
+      const card = make('article', null, 'history-item'); card.dataset.caseId = item.id;
+      const body = make('div', null, 'history-item-body'); body.append(make('h3', caseExcerpt(item.summary, 'Analisi senza sintesi')));
+      body.append(make('p', caseDate(item.created_at), 'history-date'));
+      if (item.context) body.append(make('p', caseExcerpt(item.context), 'history-context'));
+      const actions = make('div', null, 'history-actions');
+      const open = make('button', 'Apri analisi', 'button subtle'); open.type = 'button';
+      open.addEventListener('click', () => openCase(item.id, open));
+      const remove = make('button', 'Elimina', 'button danger'); remove.type = 'button';
+      remove.addEventListener('click', () => askDeleteCase(item.id, actions, remove));
+      actions.append(open, remove); card.append(body, actions); $('history-list').append(card);
+    });
+  }
+  async function loadCases({ focus = false } = {}) {
+    if (!state.authenticated || state.historyBusy) return;
+    $('history-error').hidden = true; $('history-loading').hidden = false; $('history-empty').hidden = true;
+    setHistoryBusy(true, 'Caricamento delle analisi salvate.');
+    try {
+      const data = await api('/api/cases', { headers: { 'X-CSRF-Token': state.csrf } });
+      const cases = Array.isArray(data.cases) ? data.cases : [];
+      renderCaseList(cases); state.historyLoaded = true;
+      $('history-status').textContent = cases.length ? cases.length + ' analisi salvate disponibili.' : 'Nessuna analisi salvata.';
+      if (focus) { showView('history'); focusFeedback(cases.length ? 'history-title' : 'history-empty'); }
+    } catch (err) {
+      if (err.status === 401) { await archiveSessionExpired(); return; }
+      $('history-list').replaceChildren(); $('history-error').textContent = 'Archivio non disponibile. ' + err.message; $('history-error').hidden = false;
+      $('history-status').textContent = 'Impossibile caricare l’archivio.'; if (focus) { showView('history'); focusFeedback('history-error'); }
+    } finally { $('history-loading').hidden = true; setHistoryBusy(false); }
+  }
+  async function openCase(caseId, trigger) {
+    if (state.historyBusy || state.busy) return;
+    $('history-error').hidden = true; setHistoryBusy(true, 'Apertura dell’analisi salvata.', true); trigger.textContent = 'Apertura…';
+    try {
+      const data = await api('/api/cases/' + encodeURIComponent(caseId), { headers: { 'X-CSRF-Token': state.csrf } });
+      const saved = data.case;
+      if (!saved?.analysis || !Array.isArray(saved.analysis.findings)) throw new Error('Il caso salvato è incompleto.');
+      const previousImageUrl = state.imageUrl, previousFile = state.file, previousAnswers = new Map(state.answers);
+      state.imageUrl = null; state.file = null; state.answers.clear();
+      try { await renderAnalysis(saved.analysis, saved.context || '', { archived: true }); }
+      catch (err) { state.imageUrl = previousImageUrl; state.file = previousFile; state.answers = previousAnswers; throw err; }
+      if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
+      $('photo').value = ''; $('preview-wrap').hidden = true; $('preview').removeAttribute('src');
+      state.analysis = saved.analysis; state.submittedContext = saved.context || ''; state.archive = { saved: true, case_id: saved.id }; state.openedCaseId = saved.id; state.editing = false;
+      $('context').value = saved.context || ''; showView('analysis');
+      $('empty-state').hidden = true; $('report').hidden = false; $('report-title').textContent = 'Analisi salvata';
+      $('report-notice').textContent = 'La fotografia non è conservata nell’archivio. Verifica il rapporto con l’immagine originale prima di usarlo.'; $('report-notice').hidden = false;
+      $('result-region').setAttribute('aria-labelledby', 'report-title'); $('history-status').textContent = 'Analisi salvata aperta.'; updateButton(); focusFeedback('report-title');
+    } catch (err) {
+      if (err.status === 401) { await archiveSessionExpired(); return; }
+      $('history-error').textContent = 'Impossibile aprire l’analisi. ' + err.message; $('history-error').hidden = false; $('history-status').textContent = 'Apertura non riuscita.'; showView('history'); focusFeedback('history-error');
+    } finally { trigger.textContent = 'Apri analisi'; setHistoryBusy(false); }
+  }
+  function askDeleteCase(caseId, actions, trigger) {
+    if (state.historyBusy || actions.querySelector('.delete-confirm')) return;
+    const confirm = make('div', null, 'delete-confirm'); confirm.setAttribute('role', 'group'); confirm.setAttribute('aria-label', 'Conferma eliminazione');
+    confirm.append(make('p', 'Eliminare definitivamente questa analisi?'));
+    const yes = make('button', 'Conferma eliminazione', 'button danger'); yes.type = 'button';
+    const no = make('button', 'Annulla', 'button subtle'); no.type = 'button';
+    yes.addEventListener('click', () => deleteCase(caseId, yes));
+    no.addEventListener('click', () => { confirm.remove(); trigger.hidden = false; trigger.focus(); });
+    trigger.hidden = true; confirm.append(yes, no); actions.append(confirm); yes.focus();
+  }
+  async function deleteCase(caseId, trigger) {
+    if (state.historyBusy) return;
+    setHistoryBusy(true, 'Eliminazione dell’analisi salvata.', true); trigger.textContent = 'Eliminazione…';
+    try {
+      await api('/api/cases/' + encodeURIComponent(caseId), { method: 'DELETE', headers: { 'X-CSRF-Token': state.csrf } });
+      if (state.openedCaseId === caseId) clearAnalysis();
+      setHistoryBusy(false); await loadCases(); $('history-status').textContent = 'Analisi eliminata definitivamente.'; showView('history'); focusFeedback('history-title');
+    } catch (err) {
+      if (err.status === 401) { await archiveSessionExpired(); return; }
+      $('history-error').textContent = 'Impossibile eliminare l’analisi. ' + err.message; $('history-error').hidden = false; $('history-status').textContent = 'Eliminazione non riuscita.'; showView('history'); focusFeedback('history-error');
+    } finally { trigger.textContent = 'Conferma eliminazione'; setHistoryBusy(false); }
+  }
+  $('refresh-history').addEventListener('click', () => loadCases({ focus: true }));
+  $('nav-analysis').addEventListener('click', () => { if (!state.busy && !state.caseBusy) showView('analysis', true); });
+  $('nav-history').addEventListener('click', () => { if (!state.busy && !state.caseBusy) showView('history', true); });
+  $('new-analysis').addEventListener('click', newAnalysis);
+  $('history-new-analysis').addEventListener('click', newAnalysis);
+  $('edit-analysis').addEventListener('click', () => { if (!state.busy) { state.editing = true; showView('analysis', true); } });
+  $('return-report').addEventListener('click', () => { if (!state.busy && state.analysis) { state.editing = false; showView('analysis', true); } });
   $('login-form').addEventListener('submit', async e => {
     e.preventDefault(); $('login-button').disabled = true; notice('');
     try { await api('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ password: $('password').value }) }); $('password').value = ''; applySession(await api('/api/session')); }
@@ -68,17 +230,25 @@
     try {
       await api('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf } });
       clearAnalysis(); $('analysis-form').reset(); $('preview-wrap').hidden = true; $('preview').removeAttribute('src');
-      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null;
+      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; state.view = 'analysis';
       applySession({ authenticated: false, configured: false }); applySession(await api('/api/session')); notice('Sessione chiusa.');
     } catch (err) { notice(err.message, 'error'); }
   });
   $('photo').addEventListener('change', () => {
-    clearAnalysis(); notice('');
+    const attachingArchivedPhoto = Boolean(state.analysis && !state.file);
+    if (attachingArchivedPhoto) { clearFeedback(); state.editing = true; } else clearAnalysis();
+    notice('');
     if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; $('preview-wrap').hidden = true;
+    syncWorkspace();
     const file = $('photo').files[0]; if (!file) return;
     if (file.size > 10 * 1024 * 1024) { focusFeedback(analysisError('La fotografia supera 10 MB. Scegli un file più piccolo.', 'analysis')); $('photo').value = ''; return; }
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { focusFeedback(analysisError('Scegli una fotografia JPG, PNG o WebP.', 'analysis')); $('photo').value = ''; return; }
     state.file = file; state.imageUrl = URL.createObjectURL(file); $('preview').src = state.imageUrl; $('file-name').textContent = file.name; $('preview-wrap').hidden = false;
+    if (attachingArchivedPhoto) {
+      $('report-notice').textContent = 'Fotografia selezionata per il prossimo aggiornamento. Il rapporto salvato non è ancora cambiato: verifica che sia la fotografia originale.';
+      $('report-notice').hidden = false;
+    }
+    updateButton();
   });
   function composedContext() {
     const parts = [$('context').value.trim()];
@@ -91,16 +261,16 @@
     if (!state.file) { focusFeedback(analysisError('Seleziona una fotografia prima di avviare l’analisi.', origin)); return; }
     const context = composedContext(); if (context.length > 8000) { focusFeedback(analysisError('Il contesto e le risposte superano 8.000 caratteri. Riduci i dettagli secondari prima di continuare.', origin)); return; }
     if (!state.configured) { focusFeedback(analysisError('Completa la configurazione del servizio prima di avviare un’analisi.', origin)); return; }
-    notice(''); setBusy(true); focusFeedback('busy-title'); state.controller = new AbortController();
+    notice(''); if (origin === 'analysis') state.editing = true; showView('analysis'); setBusy(true); focusFeedback('busy-title'); state.controller = new AbortController();
     $('analysis-announcement').textContent = 'Analisi in corso.';
     let outcomeTarget = 'report-title';
     const form = new FormData(); form.append('file', state.file); form.append('context', context);
     try {
       const data = await api('/analizza', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
       if (!data.analysis || !Array.isArray(data.analysis.findings)) throw new Error('Il risultato è incompleto. Non è stato presentato come analisi valida.');
-      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.archive = data.archive || null; state.submittedContext = context;
+      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.archive = data.archive || null; state.submittedContext = context; state.editing = false; state.openedCaseId = data.archive?.case_id || null;
       $('report-title').textContent = 'Analisi completata'; $('report-notice').hidden = true;
-      if (data.archive?.saved) notice('Analisi completata e risultato archiviato senza fotografia.');
+      if (data.archive?.saved) { notice('Analisi completata e risultato archiviato senza fotografia.'); loadCases(); }
       else if (data.archive?.message) {
         $('report-notice').textContent = data.archive.message + ' Esporta il rapporto se vuoi conservarlo.';
         $('report-notice').hidden = false;
@@ -128,6 +298,7 @@
   $('analysis-form').addEventListener('submit', e => { e.preventDefault(); analyse(); });
   $('questions-form').addEventListener('submit', e => {
     e.preventDefault();
+    if (state.analysis && !state.file) { state.editing = true; showView('analysis', true); return; }
     $('questions').querySelectorAll('textarea').forEach(input => { const answer = input.value.trim(); if (answer) state.answers.set(input.dataset.question, answer); else state.answers.delete(input.dataset.question); });
     analyse('questions');
   });
@@ -161,7 +332,7 @@
     analysis.findings.forEach(f => add(f.question, f.critical_unknown, '', f.id));
     return [...merged.values()].sort((a, b) => Number(b.critical) - Number(a.critical));
   }
-  async function renderAnalysis(analysis, submittedContext) {
+  async function renderAnalysis(analysis, submittedContext, options = {}) {
     // Build off-screen: a rendering failure must not overwrite the previous valid report.
     const draft = document.getElementById('report').cloneNode(true);
     const $ = id => id === 'preview' ? document.getElementById(id) : draft.querySelector('#' + id);
@@ -171,7 +342,8 @@
     $('assessment-state').textContent = hasUnknown ? 'Valutazione da completare · restano informazioni decisive da verificare.' : 'Osservazioni e misure proposte · da confermare nelle condizioni effettive.';
     $('assessment-state').className = 'assessment-state' + (hasUnknown ? ' incomplete' : '');
     $('findings').replaceChildren();
-    let image = $('preview'); try { await image.decode(); } catch { image = null; }
+    let image = options.archived || !state.imageUrl ? null : $('preview');
+    if (image) { try { await image.decode(); } catch { image = null; } }
     // Snapshot only the photo and context used by this successful request.
     const meta = analysis.meta || {};
     $('case-summary').replaceChildren();
@@ -179,7 +351,7 @@
     if (image && state.imageUrl) {
       const photo = make('img'); photo.src = state.imageUrl; photo.alt = 'Fotografia completa utilizzata per questa analisi'; photo.className = 'case-photo';
       $('case-summary').append(photo);
-    } else $('case-summary').append(make('p', 'Fotografia non disponibile per la stampa. Verificare il rapporto con la foto originale.', 'notice warning'));
+    } else $('case-summary').append(make('p', options.archived ? 'Fotografia non conservata nell’archivio. Verificare il rapporto con la foto originale.' : 'Fotografia non disponibile per la stampa. Verificare il rapporto con la foto originale.', 'notice warning'));
     $('case-summary').append(make('p', 'Contesto e chiarimenti inviati', 'measure-label'), make('p', submittedContext || 'Nessun contesto aggiuntivo fornito.', 'case-context'));
     $('case-summary').append(make('p', 'Data analisi: ' + (meta.created_at || 'non disponibile') + ' · Metodo: ' + (meta.method_version || meta.prompt_version || 'non indicato'), 'case-meta'));
     const decisiveCount = questionList.filter(q => q.critical).length;
@@ -201,7 +373,8 @@
       if (crop) card.append(crop);
       else {
         const fallback = make('p', 'Osservazione ' + finding.id + ' · Ritaglio non disponibile. ', 'crop-fallback');
-        const link = make('a', 'Apri la fotografia completa'); link.href = state.imageUrl; link.target = '_blank'; link.rel = 'noopener'; fallback.append(link, make('span', image ? 'Consulta la fotografia completa all’inizio del rapporto.' : 'Confrontare con la foto originale, non disponibile in questa stampa.', 'print-photo-reference')); card.append(fallback);
+        if (state.imageUrl) { const link = make('a', 'Apri la fotografia completa'); link.href = state.imageUrl; link.target = '_blank'; link.rel = 'noopener'; fallback.append(link); }
+        fallback.append(make('span', image ? 'Consulta la fotografia completa all’inizio del rapporto.' : 'Confrontare con la foto originale, non disponibile in questa stampa.', 'print-photo-reference')); card.append(fallback);
       }
       card.append(make('p', certaintyLabels[finding.certainty] || 'Da verificare sul posto', 'evidence-label'), make('p', finding.evidence, 'evidence-text'));
       addText(card, 'p', finding.exposed_people ? 'Persone esposte: ' + finding.exposed_people : '', 'finding-detail');
