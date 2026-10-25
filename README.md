@@ -9,7 +9,19 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 - Il file originale non viene modificato; solo il changelog storico è escluso dalla richiesta al modello.
 - Risultato strutturato con evidenze, incertezze, azioni, termini, domande e ritagli della foto.
 - Accesso con password, CSRF, quota oraria e una sola analisi simultanea.
-- Upload solo in memoria, controllo del contenuto, 10 MB e 25 megapixel, rimozione dei metadati.
+- Fondazione della prova gratuita: una sola analisi riuscita totale per azienda/proprietario,
+  bloccata atomicamente prima della chiamata al fornitore; gli errori non consumano la prova.
+- Un ciclo di chiarimento sul caso salvato è incluso e conteggiato separatamente. Ulteriori
+  chiarimenti e nuove analisi sono bloccati prima della chiamata al fornitore. Il chiarimento
+  accetta soltanto la stessa immagine normalizzata: nell'archivio resta la sua impronta
+  SHA-256, non la fotografia.
+- Upload foto solo in memoria, controllo coerente di MIME, estensione e contenuto, limite
+  configurabile (10 MB per default), 25 megapixel e rimozione dei metadati.
+- Contratto di caricamento video separato (MP4, WebM, MOV; 50 MB e 30 secondi previsti
+  per default): la UI lo
+  identifica come «in preparazione» e il backend lo rifiuta senza inviarlo al motore AI
+  né consumare la prova. Durata, estrazione fotogrammi e analisi video non sono ancora
+  validate o implementate.
 - Archivio SQLite dei risultati, senza fotografia, sempre filtrato per azienda e proprietario.
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
 - Sito di presentazione su `/` e interfaccia autenticata su `/app/`, nello stesso servizio.
@@ -57,8 +69,11 @@ Foto e contesto sono inviati al fornitore AI configurato.
 store=false evita la conservazione della risposta per la funzione Responses; non promette
 assenza di qualsiasi conservazione da parte del fornitore. Informativa, accordi e flussi
 del trattamento vanno completati prima di usare dati dei clienti.
-Il browser conserva il caso aperto in memoria fino a chiusura/ricaricamento. Esportazione JSON
-senza immagine e stampa sono azioni esplicite.
+Il browser conserva il caso aperto in memoria fino a chiusura/ricaricamento. Nella prova
+gratuita il risultato resta consultabile nell'app, mentre stampa/PDF ed esportazione JSON
+non vengono offerte dall'interfaccia. Questo non può impedire screenshot o funzioni del
+browser. I piani e i pagamenti non sono ancora implementati. Se il caso iniziale non può
+essere archiviato, il risultato resta leggibile ma il chiarimento incluso non è disponibile.
 SQLite conserva anche contatori e impronte degli indirizzi per i limiti; i record scaduti
 sono rimossi alle richieste successive. SLPS_RATE_DB_PATH e SLPS_CASE_DB_PATH devono stare
 su un volume persistente se limiti e casi devono sopravvivere ai redeploy. Un solo server
@@ -67,6 +82,11 @@ L'isolamento applicativo per azienda/proprietario è implementato e coperto da t
 pilota espone ancora un solo account configurato dal server. Mancano gestione account,
 assegnazione e chiusura delle misure, backup/ripristino e verifica di persistenza sul provider.
 Non usarlo ancora come archivio aziendale di produzione.
+
+La registrazione self-service non è stata aggiunta: introdurla senza verifica dell'indirizzo,
+recupero credenziali e separazione affidabile degli account sarebbe insicuro. Il questionario
+azienda e l'eventuale escalation a uno specialista restano una struttura di prodotto da
+validare; non è codificata alcuna determinazione legale automatica CFSL 6508.
 
 ## Verifica
 Installa requirements-dev.txt ed esegui:

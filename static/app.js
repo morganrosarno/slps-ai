@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, imageUrl: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true };
+  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, mediaKind: null, imageUrl: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_analysis_enabled: false } };
   const certaintyLabels = { visible: 'Visibile nella foto', reported: 'Riferito dall’utilizzatore', verify: 'Da verificare sul posto' };
   const riskLabels = { high: 'Rischio alto', medium: 'Rischio medio', low: 'Rischio basso', undetermined: 'Rischio da determinare' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
@@ -19,7 +19,7 @@
     $('input-panel').hidden = state.busy || (hasReport && !state.editing);
     $('input-panel').className = 'panel input-panel' + (state.file ? ' has-photo' : '');
     $('return-report').hidden = !hasReport || !state.editing;
-    $('upload-title').textContent = state.file ? 'Vuoi cambiare fotografia?' : 'Carica una fotografia';
+    $('upload-title').textContent = state.file ? 'Vuoi cambiare file?' : 'Carica foto o video';
     $('submit-note').textContent = hasReport ? 'Il rapporto corrente cambia solo dopo una nuova analisi riuscita.' : 'Controlla foto e contesto prima di avviare.';
     const activeStep = state.busy || (hasReport && !state.editing) ? 2 : state.file ? 1 : 0;
     ['step-photo', 'step-context', 'step-result'].forEach((id, index) => {
@@ -38,8 +38,9 @@
   function newAnalysis() {
     if (state.busy || state.caseBusy) return;
     if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
-    state.file = null; state.imageUrl = null; $('photo').value = ''; $('context').value = '';
+    state.file = null; state.mediaKind = null; state.imageUrl = null; $('photo').value = ''; $('context').value = '';
     $('preview-wrap').hidden = true; $('preview').removeAttribute('src'); $('file-name').textContent = '';
+    $('media-note').hidden = true; $('media-note').textContent = '';
     clearAnalysis(); notice(''); showView('analysis', true);
   }
   function notice(text, kind = '') { $('status').textContent = text; $('status').className = 'notice' + (kind ? ' ' + kind : ''); $('status').hidden = !text; }
@@ -66,12 +67,14 @@
     const response = await fetch(url, { credentials: 'same-origin', ...options });
     let data;
     try { data = await response.json(); } catch { throw new Error('Il servizio ha restituito una risposta non leggibile. Nessuna analisi è stata acquisita.'); }
-    if (!response.ok) { const error = new Error(data.error?.message || 'Operazione non riuscita.'); error.status = response.status; error.code = data.error?.code; throw error; }
+    if (!response.ok) { const error = new Error(data.error?.message || 'Operazione non riuscita.'); error.status = response.status; error.code = data.error?.code; error.data = data; throw error; }
     return data;
   }
   function applySession(data) {
     const wasAuthenticated = state.authenticated;
     state.authenticated = Boolean(data.authenticated); state.csrf = data.csrf || ''; state.configured = Boolean(data.configured);
+    if (data.entitlement) state.entitlement = { ...state.entitlement, ...data.entitlement };
+    if (data.media) state.media = { ...state.media, ...data.media };
     $('login-panel').hidden = state.authenticated; $('workspace').hidden = !state.authenticated; $('logout').hidden = !state.authenticated;
     $('login-button').disabled = data.auth_configured === false;
     if (!state.authenticated && data.auth_configured === false) notice('L’accesso al pilota non è ancora configurato. Completa la configurazione riservata del servizio prima di utilizzarlo.', 'warning');
@@ -81,8 +84,13 @@
     if (!state.authenticated) resetHistory();
   }
   function updateButton() {
-    $('analyse-button').disabled = state.busy || !state.configured; $('reanalyse-button').disabled = state.busy || !state.configured;
-    $('export-json').disabled = state.busy || !state.analysis; $('print-report').disabled = state.busy || !state.analysis;
+    const trialExhausted = state.entitlement.plan === 'trial' && state.entitlement.analyses_remaining === 0;
+    const canExport = state.entitlement.export_allowed !== false;
+    $('analyse-button').disabled = state.busy || !state.configured || state.mediaKind === 'video' || (trialExhausted && !state.openedCaseId); $('reanalyse-button').disabled = state.busy || !state.configured;
+    $('export-json').disabled = state.busy || !state.analysis || !canExport; $('print-report').disabled = state.busy || !state.analysis || !canExport;
+    $('export-json').hidden = !canExport; $('print-report').hidden = !canExport; $('trial-export-note').hidden = canExport || !state.analysis;
+    $('trial-entitlement-note').hidden = !trialExhausted || Boolean(state.openedCaseId);
+    $('trial-entitlement-note').textContent = trialExhausted ? 'La prova gratuita è stata utilizzata. Puoi consultare il risultato; una nuova analisi richiede un piano successivo.' : '';
     ['new-analysis', 'history-new-analysis', 'nav-analysis', 'nav-history', 'edit-analysis', 'return-report'].forEach(id => { $(id).disabled = state.busy || state.caseBusy; });
     if (!state.busy) $('reanalyse-button').textContent = state.analysis && !state.file ? 'Aggiungi la foto per aggiornare' : 'Aggiorna con le risposte';
     syncWorkspace();
@@ -230,7 +238,7 @@
     try {
       await api('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf } });
       clearAnalysis(); $('analysis-form').reset(); $('preview-wrap').hidden = true; $('preview').removeAttribute('src');
-      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; state.view = 'analysis';
+      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; state.mediaKind = null; state.view = 'analysis';
       applySession({ authenticated: false, configured: false }); applySession(await api('/api/session')); notice('Sessione chiusa.');
     } catch (err) { notice(err.message, 'error'); }
   });
@@ -238,12 +246,21 @@
     const attachingArchivedPhoto = Boolean(state.analysis && !state.file);
     if (attachingArchivedPhoto) { clearFeedback(); state.editing = true; } else clearAnalysis();
     notice('');
-    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; $('preview-wrap').hidden = true;
+    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; state.mediaKind = null; $('preview-wrap').hidden = true; $('preview').hidden = false; $('media-note').hidden = true;
     syncWorkspace();
     const file = $('photo').files[0]; if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { focusFeedback(analysisError('La fotografia supera 10 MB. Scegli un file più piccolo.', 'analysis')); $('photo').value = ''; return; }
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { focusFeedback(analysisError('Scegli una fotografia JPG, PNG o WebP.', 'analysis')); $('photo').value = ''; return; }
-    state.file = file; state.imageUrl = URL.createObjectURL(file); $('preview').src = state.imageUrl; $('file-name').textContent = file.name; $('preview-wrap').hidden = false;
+    const images = ['image/jpeg', 'image/png', 'image/webp'], videos = ['video/mp4', 'video/webm', 'video/quicktime'];
+    if (!images.includes(file.type) && !videos.includes(file.type)) { focusFeedback(analysisError('Scegli una foto JPG, PNG, WebP oppure un video MP4, WebM o MOV.', 'analysis')); $('photo').value = ''; return; }
+    const isVideo = videos.includes(file.type), limit = isVideo ? state.media.video_max_bytes : state.media.image_max_bytes;
+    if (file.size > limit) { focusFeedback(analysisError((isVideo ? 'Il video' : 'La fotografia') + ' supera il limite di ' + Math.floor(limit / 1024 / 1024) + ' MB.', 'analysis')); $('photo').value = ''; return; }
+    state.file = file; state.mediaKind = isVideo ? 'video' : 'image'; $('file-name').textContent = file.name; $('preview-wrap').hidden = false;
+    $('media-ready').textContent = isVideo ? 'Video selezionato' : 'Foto selezionata';
+    if (isVideo) {
+      $('preview').hidden = true; $('preview').removeAttribute('src');
+      $('media-note').textContent = 'Formato ed estensione del video riconosciuti (limite previsto: ' + state.media.video_max_seconds + ' secondi). Contenuto e durata non sono ancora validati: l’analisi video è in preparazione, il file non verrà inviato al motore AI e non consumerà la prova gratuita.'; $('media-note').hidden = false;
+    } else {
+      state.imageUrl = URL.createObjectURL(file); $('preview').src = state.imageUrl; $('preview').hidden = false; $('media-note').hidden = true;
+    }
     if (attachingArchivedPhoto) {
       $('report-notice').textContent = 'Fotografia selezionata per il prossimo aggiornamento. Il rapporto salvato non è ancora cambiato: verifica che sia la fotografia originale.';
       $('report-notice').hidden = false;
@@ -258,25 +275,31 @@
   async function analyse(origin = 'analysis') {
     if (state.busy) return;
     clearFeedback();
-    if (!state.file) { focusFeedback(analysisError('Seleziona una fotografia prima di avviare l’analisi.', origin)); return; }
+    if (!state.file) { focusFeedback(analysisError('Seleziona una foto o un video prima di avviare l’analisi.', origin)); return; }
+    if (state.mediaKind === 'video') { focusFeedback(analysisError('L’analisi video è in preparazione. Il video non è stato inviato e la prova gratuita non è stata consumata.', origin)); return; }
     const context = composedContext(); if (context.length > 8000) { focusFeedback(analysisError('Il contesto e le risposte superano 8.000 caratteri. Riduci i dettagli secondari prima di continuare.', origin)); return; }
     if (!state.configured) { focusFeedback(analysisError('Completa la configurazione del servizio prima di avviare un’analisi.', origin)); return; }
     notice(''); if (origin === 'analysis') state.editing = true; showView('analysis'); setBusy(true); focusFeedback('busy-title'); state.controller = new AbortController();
     $('analysis-announcement').textContent = 'Analisi in corso.';
     let outcomeTarget = 'report-title';
     const form = new FormData(); form.append('file', state.file); form.append('context', context);
+    form.append('request_kind', state.analysis && state.openedCaseId ? 'clarification' : 'initial');
+    if (state.analysis && state.openedCaseId) form.append('case_id', state.openedCaseId);
     try {
       const data = await api('/analizza', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
       if (!data.analysis || !Array.isArray(data.analysis.findings)) throw new Error('Il risultato è incompleto. Non è stato presentato come analisi valida.');
-      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.archive = data.archive || null; state.submittedContext = context; state.editing = false; state.openedCaseId = data.archive?.case_id || null;
+      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.archive = data.archive || null; state.submittedContext = context; state.editing = false; state.openedCaseId = data.archive?.case_id || state.openedCaseId || null;
+      if (data.entitlement) state.entitlement = data.entitlement;
       $('report-title').textContent = 'Analisi completata'; $('report-notice').hidden = true;
       if (data.archive?.saved) { notice('Analisi completata e risultato archiviato senza fotografia.'); loadCases(); }
       else if (data.archive?.message) {
-        $('report-notice').textContent = data.archive.message + ' Esporta il rapporto se vuoi conservarlo.';
+        const exportHint = state.entitlement.export_allowed === false ? ' Il risultato resta consultabile in questa pagina.' : ' Esporta il rapporto se vuoi conservarlo.';
+        $('report-notice').textContent = data.archive.message + exportHint;
         $('report-notice').hidden = false;
       }
       $('analysis-announcement').textContent = 'Analisi completata. Il risultato è disponibile e va verificato sul posto.';
     } catch (err) {
+      if (err.data?.entitlement) { state.entitlement = err.data.entitlement; updateButton(); }
       if (err.status === 401) {
         analysisError('Sessione scaduta. Il tentativo non ha prodotto un nuovo risultato.', origin);
         applySession({ authenticated: false, configured: false });

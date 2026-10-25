@@ -28,6 +28,7 @@ def app(tmp_path, monkeypatch):
         "PILOT_TENANT_ID": "tenant-a",
         "PILOT_OWNER_ID": "owner-a",
         "ANALYSES_PER_HOUR": 2,
+        "PILOT_PLAN": "internal",
     })
 
 
@@ -46,6 +47,30 @@ def post_image(client, token, raw=None, filename="photo.png", context=""):
         "file": (io.BytesIO(photo() if raw is None else raw), filename),
         "context": context,
     }, headers={"X-CSRF-Token": token})
+
+
+def post_media(client, token, raw, filename, mime, **fields):
+    return client.post("/analizza", data={
+        "file": (io.BytesIO(raw), filename, mime),
+        **fields,
+    }, headers={"X-CSRF-Token": token})
+
+
+def trial_app(tmp_path, monkeypatch, hourly=10):
+    monkeypatch.setattr(server, "is_analysis_configured", lambda: True)
+    return server.create_app({
+        "TESTING": True,
+        "SECRET_KEY": "trial-session-secret-32-characters-long",
+        "PILOT_PASSWORD": "trial-password-16-chars",
+        "SESSION_COOKIE_SECURE": False,
+        "RATE_DB_PATH": str(tmp_path / "trial-limits.sqlite3"),
+        "CASE_DB_PATH": str(tmp_path / "trial-cases.sqlite3"),
+        "PILOT_TENANT_ID": "trial-tenant",
+        "PILOT_OWNER_ID": "trial-owner",
+        "ANALYSES_PER_HOUR": hourly,
+        "PILOT_PLAN": "trial",
+        "TRIAL_ANALYSES_TOTAL": 1,
+    })
 
 
 def test_unconfigured_auth_fails_closed(app, client):
@@ -126,7 +151,7 @@ def test_analysis_requires_csrf(client, monkeypatch):
 
 def test_file_bytes_reach_provider_and_filename_is_never_written(client, tmp_path, monkeypatch):
     token = login(client).json["csrf"]
-    target = tmp_path / "unexpected.py"
+    target = tmp_path / "unexpected.png"
     seen = {}
     def analyze(raw, mime, context):
         seen.update(raw=raw, mime=mime, context=context)
@@ -247,6 +272,7 @@ def test_archive_failure_preserves_paid_analysis_and_releases_lease(client, app,
     assert response.json["archive"] == {
         "saved": False,
         "case_id": None,
+        "clarification_available": False,
         "message": "Risultato non archiviato per un problema temporaneo.",
     }
     assert "private-db-detail" not in response.text
@@ -385,3 +411,128 @@ def test_unknown_route_returns_json(client):
     response = client.post("/missing")
     assert response.status_code == 404
     assert "error" in response.json
+
+
+def test_media_contract_rejects_mime_extension_and_content_mismatch(client, monkeypatch):
+    token = login(client).json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: pytest.fail("Provider called"))
+    declared = post_media(client, token, photo("PNG"), "photo.jpg", "image/png")
+    assert declared.status_code == 400
+    assert declared.json["error"]["code"] == "invalid_media"
+    content = post_media(client, token, photo("JPEG"), "photo.png", "image/png")
+    assert content.status_code == 400
+    assert content.json["error"]["code"] == "invalid_image"
+
+
+def test_video_is_recognized_but_never_sent_or_charged(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: pytest.fail("Provider called"))
+    response = post_media(client, token, b"synthetic-video", "clip.mp4", "video/mp4")
+    assert response.status_code == 501
+    assert response.json["error"]["code"] == "video_pipeline_unavailable"
+    assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1
+
+
+def test_trial_allows_one_success_and_blocks_second_before_provider(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    calls = []
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: calls.append(1) or {"summary": "ok", "findings": []})
+    first = post_image(client, token)
+    assert first.status_code == 200
+    assert first.json["entitlement"]["analyses_remaining"] == 0
+    assert first.json["entitlement"]["export_allowed"] is False
+    second = post_image(client, token)
+    assert second.status_code == 402
+    assert second.json["error"]["code"] == "trial_exhausted"
+    assert len(calls) == 1
+
+
+def test_failed_provider_call_does_not_consume_trial(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    monkeypatch.setattr(
+        server,
+        "analizza_immagine",
+        lambda *_args: (_ for _ in ()).throw(server.AnalysisError("temporary", "Riprova.", 503)),
+    )
+    assert post_image(client, token).status_code == 503
+    assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1
+
+
+def test_trial_includes_one_clarification_for_saved_case_only(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    calls = []
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: calls.append(1) or {"summary": "ok", "findings": []})
+    initial = post_image(client, token)
+    case_id = initial.json["archive"]["case_id"]
+    clarification = post_media(
+        client, token, photo(), "photo.png", "image/png",
+        request_kind="clarification", case_id=case_id, context="Chiarimento",
+    )
+    assert clarification.status_code == 200
+    assert clarification.json["entitlement"]["clarifications_remaining"] == 0
+    again = post_media(
+        client, token, photo(), "photo.png", "image/png",
+        request_kind="clarification", case_id=case_id,
+    )
+    assert again.status_code == 402
+    assert len(calls) == 2
+
+
+def test_trial_clarification_rejects_a_different_image_before_provider_and_quota(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    calls = []
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: calls.append(1) or {"summary": "ok", "findings": []})
+    initial = post_image(client, token)
+    case_id = initial.json["archive"]["case_id"]
+    mismatch = post_media(
+        client, token, photo(size=(49, 32)), "photo.png", "image/png",
+        request_kind="clarification", case_id=case_id,
+    )
+    assert mismatch.status_code == 400
+    assert mismatch.json["error"]["code"] == "clarification_image_mismatch"
+    assert len(calls) == 1
+    assert client.get("/api/session").json["entitlement"]["clarifications_remaining"] == 1
+    accepted = post_media(
+        client, token, photo(), "photo.png", "image/png",
+        request_kind="clarification", case_id=case_id,
+    )
+    assert accepted.status_code == 200
+    assert len(calls) == 2
+
+
+def test_trial_archive_failure_explains_clarification_dependency_without_export_hint(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: {"summary": "ok", "findings": []})
+    monkeypatch.setattr(
+        app.extensions["case_store"],
+        "create",
+        lambda *_args: (_ for _ in ()).throw(sqlite3.OperationalError("unavailable")),
+    )
+    response = post_image(client, token)
+    assert response.status_code == 200
+    assert response.json["archive"]["clarification_available"] is False
+    assert "richiede un caso salvato" in response.json["archive"]["message"]
+    assert "Esporta" not in response.json["archive"]["message"]
+
+
+def test_trial_and_hourly_limits_are_separate(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch, hourly=0)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: pytest.fail("Provider called"))
+    response = post_image(client, token)
+    assert response.status_code == 429
+    assert response.json["error"]["code"] == "analysis_rate_limited"
+    assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1

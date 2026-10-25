@@ -11,7 +11,7 @@ const script = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const template = fs.readFileSync(path.join(root, 'templates/index.html'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseListStatus = 200, sessionResponses = [], deferHistory = false } = {}) {
+async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseListStatus = 200, sessionResponses = [], deferHistory = false, sessionData = {} } = {}) {
   const elements = new Map(), requests = [], historyGets = [], scrolls = [], exports = [], prints = [];
   let currentCases = [...initialCases];
   let doc;
@@ -46,7 +46,7 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
     return { querySelector: selector => copies.get(selector.slice(1)) };
   };
   doc = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => text, body: new Element('body'), activeElement: null };
-  const session = { authenticated: true, configured: true, csrf: 'test-csrf' };
+  const session = { authenticated: true, configured: true, csrf: 'test-csrf', ...sessionData };
   let sessionReadCount = 0;
   const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
   const context = { document: doc, window: { matchMedia: () => ({ matches: reducedMotion }), print() { prints.push(true); } }, URL: class extends URL { static createObjectURL(value) { if (value instanceof Blob) exports.push(value); return 'blob:test-photo'; } static revokeObjectURL() {} }, Blob, AbortController, FormData: class { append() {} }, setTimeout: callback => { callback(); }, console,
@@ -63,6 +63,7 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
     } };
   vm.runInNewContext(script, context, { filename: 'static/app.js' }); await tick();
   function photo(name = 'sample.jpg') { $('photo').files = [{ name, type: 'image/jpeg', size: 100 }]; $('photo').handlers.change(); }
+  function video(name = 'sample.mp4') { $('photo').files = [{ name, type: 'video/mp4', size: 100 }]; $('photo').handlers.change(); }
   async function submit(origin = 'analysis') { $(origin + '-form').handlers.submit({ preventDefault() {} }); await tick(); }
   async function finishRequest(expectedUrl, data, status = 200) {
     const request = requests.shift(); assert.equal(request.url, expectedUrl);
@@ -70,9 +71,44 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
     request.resolve(data, status); await tick(); await tick();
   }
   async function finish(data, status = 200) { await finishRequest('/analizza', data, status); }
-  return { $, doc, photo, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, session, Element };
+  return { $, doc, photo, video, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, session, Element };
 }
 const report = (summary = 'Valid report') => ({ findings: [], questions: [], sources: [], summary });
+
+test('video intake is explicit but does not call the unavailable pipeline', async () => {
+  const f = await fixture({ sessionData: { media: { image_max_bytes: 10485760, video_max_bytes: 52428800, video_analysis_enabled: false } } });
+  f.video();
+  assert.equal(f.$('media-note').hidden, false);
+  assert.match(f.$('media-note').textContent, /preparazione/);
+  assert.equal(f.$('analyse-button').disabled, true);
+  await f.submit();
+  assert.equal(f.requests.length, 0);
+  assert.match(f.$('analysis-feedback').textContent, /non è stato inviato/);
+});
+
+test('trial result remains readable while print and export are unavailable', async () => {
+  const trial = { plan: 'trial', analyses_total: 1, analyses_used: 0, analyses_remaining: 1, clarifications_remaining: 1, export_allowed: false };
+  const f = await fixture({ sessionData: { entitlement: trial } });
+  f.photo(); await f.submit();
+  await f.finish({ analysis: report(), archive: { saved: true, case_id: 'case-1' }, entitlement: { ...trial, analyses_used: 1, analyses_remaining: 0 } });
+  assert.equal(f.$('report').hidden, false);
+  assert.equal(f.$('print-report').hidden, true);
+  assert.equal(f.$('export-json').hidden, true);
+  assert.equal(f.$('trial-export-note').hidden, false);
+});
+
+test('trial archive failure does not suggest an unavailable export', async () => {
+  const trial = { plan: 'trial', analyses_total: 1, analyses_used: 0, analyses_remaining: 1, clarifications_remaining: 1, export_allowed: false };
+  const f = await fixture({ sessionData: { entitlement: trial } });
+  f.photo(); await f.submit();
+  await f.finish({
+    analysis: report(),
+    archive: { saved: false, case_id: null, clarification_available: false, message: 'Risultato non archiviato. Il chiarimento incluso richiede un caso salvato.' },
+    entitlement: { ...trial, analyses_used: 1, analyses_remaining: 0 },
+  });
+  assert.doesNotMatch(f.$('report-notice').textContent, /Esporta/);
+  assert.match(f.$('report-notice').textContent, /resta consultabile/);
+});
 
 test('loading is focused; completion focuses its title and enables report actions', async () => {
   const f = await fixture(); f.photo(); await f.submit();
@@ -418,7 +454,7 @@ test('new analysis clears the current draft and answers without deleting any sav
   assert.equal(f.$('preview-wrap').hidden, true); assert.equal(f.$('report').hidden, true);
   assert.equal(f.$('questions').childNodes.length, 0); assert.equal(f.$('export-json').disabled, true);
   assert.equal(f.$('step-photo').attrs['aria-current'], 'step'); assert.equal(f.doc.activeElement.id, 'input-title');
-  await f.submit(); assert.equal(f.requests.length, 0); assert.match(f.$('analysis-feedback').textContent, /Seleziona una fotografia/);
+  await f.submit(); assert.equal(f.requests.length, 0); assert.match(f.$('analysis-feedback').textContent, /Seleziona una foto o un video/);
 });
 
 test('navigation and new analysis cannot discard an in-flight analysis', async () => {
@@ -440,7 +476,7 @@ test('opening an archived report restores its context for editing and requires a
   assert.equal(f.$('history-panel').hidden, true); assert.equal(f.$('input-panel').hidden, true);
   f.$('edit-analysis').click();
   assert.equal(f.$('context').value, saved.context); assert.equal(f.$('preview-wrap').hidden, true);
-  await f.submit(); assert.equal(f.requests.length, 0); assert.match(f.$('analysis-feedback').textContent, /Seleziona una fotografia/);
+  await f.submit(); assert.equal(f.requests.length, 0); assert.match(f.$('analysis-feedback').textContent, /Seleziona una foto o un video/);
   assert.equal(f.$('summary').textContent, 'Analisi archiviata');
 });
 
