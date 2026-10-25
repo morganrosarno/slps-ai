@@ -29,9 +29,12 @@ Impostare inoltre:
 - `SLPS_COOKIE_SECURE=true`
 - `SLPS_ANALYSES_PER_HOUR` al limite autorizzato
 - `SLPS_RATE_DB_PATH` su un volume persistente, se disponibile
+- `SLPS_CASE_DB_PATH` sullo stesso volume persistente, se disponibile
+- `SLPS_PILOT_TENANT_ID` e `SLPS_PILOT_OWNER_ID` con identificativi interni stabili
 
-Senza volume persistente il pilota può funzionare, ma i contatori dei limiti
-possono azzerarsi dopo riavvio o deploy: il controllo lo segnala come avviso.
+Senza volume persistente il pilota può funzionare, ma contatori e archivio casi
+possono azzerarsi dopo riavvio o deploy. Non presentare quindi l'archivio come
+duraturo finché persistenza, backup e ripristino non sono stati provati.
 
 ## Controllo senza chiamate AI
 

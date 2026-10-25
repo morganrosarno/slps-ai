@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { csrf: '', authenticated: false, configured: false, busy: false, file: null, imageUrl: null, analysis: null, controller: null, answers: new Map(), submittedContext: '' };
+  const state = { csrf: '', authenticated: false, configured: false, busy: false, file: null, imageUrl: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '' };
   const certaintyLabels = { visible: 'Visibile nella foto', reported: 'Riferito dall’utilizzatore', verify: 'Da verificare sul posto' };
   const riskLabels = { high: 'Rischio alto', medium: 'Rischio medio', low: 'Rischio basso', undetermined: 'Rischio da determinare' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
@@ -50,7 +50,7 @@
     $('result-region').setAttribute('aria-labelledby', value ? 'busy-title' : state.analysis ? 'report-title' : 'result-title');
   }
   function clearAnalysis() {
-    state.analysis = null; state.answers.clear(); state.submittedContext = ''; clearFeedback();
+    state.analysis = null; state.archive = null; state.answers.clear(); state.submittedContext = ''; clearFeedback();
     $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren();
     $('case-summary').replaceChildren(); $('question-summary').replaceChildren(); $('question-summary').hidden = true;
     $('report-notice').hidden = true; $('report-title').textContent = 'Analisi completata';
@@ -98,8 +98,13 @@
     try {
       const data = await api('/analizza', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
       if (!data.analysis || !Array.isArray(data.analysis.findings)) throw new Error('Il risultato è incompleto. Non è stato presentato come analisi valida.');
-      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.submittedContext = context;
+      await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.archive = data.archive || null; state.submittedContext = context;
       $('report-title').textContent = 'Analisi completata'; $('report-notice').hidden = true;
+      if (data.archive?.saved) notice('Analisi completata e risultato archiviato senza fotografia.');
+      else if (data.archive?.message) {
+        $('report-notice').textContent = data.archive.message + ' Esporta il rapporto se vuoi conservarlo.';
+        $('report-notice').hidden = false;
+      }
       $('analysis-announcement').textContent = 'Analisi completata. Il risultato è disponibile e va verificato sul posto.';
     } catch (err) {
       if (err.status === 401) {

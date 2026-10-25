@@ -5,8 +5,10 @@ from functools import wraps
 import hashlib
 import hmac
 import io
+import json
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import time
@@ -22,6 +24,8 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_CONTEXT_CHARS = 8_000
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+MAX_CASE_JSON_BYTES = 2 * 1024 * 1024
 
 
 class MemoryUploadRequest(Request):
@@ -88,6 +92,107 @@ class LimitStore:
             db.execute("DELETE FROM leases WHERE name='analysis' AND token=?", (token,))
 
 
+class CaseStore:
+    """Archive results without photographs, scoped by tenant and owner."""
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with self.connect() as db:
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS cases (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    created REAL NOT NULL,
+                    context TEXT NOT NULL,
+                    analysis_json TEXT NOT NULL
+                )"""
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS cases_owner_created "
+                "ON cases(tenant_id, owner_id, created DESC)"
+            )
+        try:
+            self.path.chmod(0o600)
+        except OSError:
+            pass
+
+    @contextmanager
+    def connect(self):
+        db = sqlite3.connect(self.path, timeout=5)
+        db.row_factory = sqlite3.Row
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def create(self, tenant_id, owner_id, context, analysis, max_cases):
+        encoded = json.dumps(analysis, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > MAX_CASE_JSON_BYTES:
+            return None, "too_large"
+        now = time.time()
+        case_id = secrets.token_urlsafe(18)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            count = db.execute(
+                "SELECT COUNT(*) FROM cases WHERE tenant_id=? AND owner_id=?",
+                (tenant_id, owner_id),
+            ).fetchone()[0]
+            if count >= max_cases:
+                return None, "limit"
+            db.execute(
+                "INSERT INTO cases VALUES (?, ?, ?, ?, ?, ?)",
+                (case_id, tenant_id, owner_id, now, context, encoded),
+            )
+        return case_id, None
+
+    def list(self, tenant_id, owner_id):
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT id, created, context, analysis_json
+                   FROM cases
+                   WHERE tenant_id=? AND owner_id=?
+                   ORDER BY created DESC""",
+                (tenant_id, owner_id),
+            ).fetchall()
+        cases = []
+        for row in rows:
+            analysis = json.loads(row["analysis_json"])
+            cases.append({
+                "id": row["id"],
+                "created_at": row["created"],
+                "context": row["context"],
+                "summary": analysis.get("summary", "") if isinstance(analysis, dict) else "",
+            })
+        return cases
+
+    def get(self, case_id, tenant_id, owner_id):
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT id, created, context, analysis_json
+                   FROM cases
+                   WHERE id=? AND tenant_id=? AND owner_id=?""",
+                (case_id, tenant_id, owner_id),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "created_at": row["created"],
+            "context": row["context"],
+            "analysis": json.loads(row["analysis_json"]),
+        }
+
+    def delete(self, case_id, tenant_id, owner_id):
+        with self.connect() as db:
+            cursor = db.execute(
+                "DELETE FROM cases WHERE id=? AND tenant_id=? AND owner_id=?",
+                (case_id, tenant_id, owner_id),
+            )
+        return cursor.rowcount == 1
+
+
 def normalize_image(raw):
     """Validate content, reject animation, orient and remove all metadata."""
     if not raw or len(raw) > MAX_FILE_BYTES:
@@ -136,20 +241,30 @@ def create_app(test_config=None):
         MAX_FORM_MEMORY_SIZE=64 * 1024,
         MAX_FORM_PARTS=8,
         RATE_DB_PATH=os.getenv("SLPS_RATE_DB_PATH", str(Path(app.instance_path) / "limits.sqlite3")),
+        CASE_DB_PATH=os.getenv("SLPS_CASE_DB_PATH", str(Path(app.instance_path) / "cases.sqlite3")),
+        PILOT_TENANT_ID=os.getenv("SLPS_PILOT_TENANT_ID", "pilot"),
+        PILOT_OWNER_ID=os.getenv("SLPS_PILOT_OWNER_ID", "owner"),
+        MAX_CASES_PER_OWNER=int(os.getenv("SLPS_MAX_CASES_PER_OWNER", "100")),
         ANALYSES_PER_HOUR=int(os.getenv("SLPS_ANALYSES_PER_HOUR", "10")),
         ANALYSIS_LEASE_SECONDS=180,
     )
     if test_config:
         app.config.update(test_config)
     store = LimitStore(app.config["RATE_DB_PATH"])
+    case_store = CaseStore(app.config["CASE_DB_PATH"])
     app.extensions["limit_store"] = store
+    app.extensions["case_store"] = case_store
 
     def auth_configured():
         secret = app.config.get("SECRET_KEY")
         password = app.config.get("PILOT_PASSWORD")
+        tenant_id = app.config.get("PILOT_TENANT_ID")
+        owner_id = app.config.get("PILOT_OWNER_ID")
         return bool(
             isinstance(secret, (str, bytes)) and len(secret) >= 32 and secret.strip()
             and isinstance(password, str) and len(password) >= 16 and password.strip()
+            and isinstance(tenant_id, str) and PRINCIPAL_ID.fullmatch(tenant_id)
+            and isinstance(owner_id, str) and PRINCIPAL_ID.fullmatch(owner_id)
         )
 
     def error(code, message, status):
@@ -177,7 +292,7 @@ def create_app(test_config=None):
         def wrapped(*args, **kwargs):
             if not auth_configured():
                 return error("configuration_missing", "Accesso pilota non ancora configurato.", 503)
-            if not session.get("authenticated"):
+            if not session.get("authenticated") or not session.get("tenant_id") or not session.get("owner_id"):
                 return error("authentication_required", "Accedi per utilizzare il progetto pilota.", 401)
             if not same_origin() or not csrf_valid():
                 return error("invalid_csrf", "Sessione scaduta: ricarica la pagina e riprova.", 403)
@@ -231,6 +346,8 @@ def create_app(test_config=None):
         session.clear()
         session.permanent = True
         session["authenticated"] = True
+        session["tenant_id"] = app.config["PILOT_TENANT_ID"]
+        session["owner_id"] = app.config["PILOT_OWNER_ID"]
         session["csrf"] = secrets.token_urlsafe(32)
         ready = is_analysis_configured()
         return jsonify(authenticated=True, csrf=session["csrf"], configured=ready, auth_configured=True, analysis_configured=ready)
@@ -240,6 +357,30 @@ def create_app(test_config=None):
     def logout():
         session.clear()
         return jsonify(authenticated=False)
+
+    @app.get("/api/cases")
+    @protect
+    def list_cases():
+        return jsonify(cases=case_store.list(session["tenant_id"], session["owner_id"]))
+
+    @app.get("/api/cases/<case_id>")
+    @protect
+    def get_case(case_id):
+        if len(case_id) > 64:
+            return error("case_not_found", "Caso non disponibile.", 404)
+        case = case_store.get(case_id, session["tenant_id"], session["owner_id"])
+        if not case:
+            return error("case_not_found", "Caso non disponibile.", 404)
+        return jsonify(case=case)
+
+    @app.delete("/api/cases/<case_id>")
+    @protect
+    def delete_case(case_id):
+        if len(case_id) > 64 or not case_store.delete(
+            case_id, session["tenant_id"], session["owner_id"]
+        ):
+            return error("case_not_found", "Caso non disponibile.", 404)
+        return jsonify(deleted=True)
 
     @app.post("/analizza")
     @protect
@@ -264,7 +405,33 @@ def create_app(test_config=None):
             return error("analysis_rate_limited", "Limite orario raggiunto. Attendi prima di avviare altre analisi.", 429)
         try:
             result = analizza_immagine(image, mime_type, context)
-            return jsonify(analysis=result, image={"width": width, "height": height})
+            try:
+                case_id, archive_failure = case_store.create(
+                    session["tenant_id"],
+                    session["owner_id"],
+                    context,
+                    result,
+                    app.config["MAX_CASES_PER_OWNER"],
+                )
+                archive = {"saved": bool(case_id), "case_id": case_id}
+                if archive_failure == "limit":
+                    archive["message"] = "Archivio pieno: elimina un caso prima di salvarne un altro."
+                elif archive_failure:
+                    archive["message"] = "Risultato non archiviato: dimensione superiore al limite."
+            except (sqlite3.Error, OSError, TypeError):
+                # The paid analysis already succeeded: never discard it because
+                # the optional pilot archive is temporarily unavailable.
+                app.logger.error("Case archive unavailable after successful analysis")
+                archive = {
+                    "saved": False,
+                    "case_id": None,
+                    "message": "Risultato non archiviato per un problema temporaneo.",
+                }
+            return jsonify(
+                analysis=result,
+                image={"width": width, "height": height},
+                archive=archive,
+            )
         except AnalysisError as exc:
             return error(exc.code, exc.message, exc.status)
         finally:

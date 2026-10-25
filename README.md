@@ -10,6 +10,7 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 - Risultato strutturato con evidenze, incertezze, azioni, termini, domande e ritagli della foto.
 - Accesso con password, CSRF, quota oraria e una sola analisi simultanea.
 - Upload solo in memoria, controllo del contenuto, 10 MB e 25 megapixel, rimozione dei metadati.
+- Archivio SQLite dei risultati, senza fotografia, sempre filtrato per azienda e proprietario.
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
 
 ## Avvio locale
@@ -43,17 +44,26 @@ Il server elimina riferimenti del modello non presenti nel registro.
 Questo controllo non dimostra da solo la pertinenza o correttezza legale dei testi generati.
 
 ## Dati e limiti
-Foto e risultati non vengono conservati in uno storico sul server. Sono inviati al fornitore AI configurato.
+Le foto non vengono conservate sul server. Il risultato strutturato e il contesto fornito
+vengono archiviati in SQLite per l'azienda e il proprietario configurati.
+Sono disponibili API autenticate per elencare, leggere ed eliminare i propri casi.
+Un identificativo di caso non consente da solo l'accesso: ogni operazione applica anche
+il filtro su azienda e proprietario.
+
+Foto e contesto sono inviati al fornitore AI configurato.
 store=false evita la conservazione della risposta per la funzione Responses; non promette
 assenza di qualsiasi conservazione da parte del fornitore. Informativa, accordi e flussi
 del trattamento vanno completati prima di usare dati dei clienti.
 Il browser conserva il caso aperto in memoria fino a chiusura/ricaricamento. Esportazione JSON
 senza immagine e stampa sono azioni esplicite.
-SQLite conserva contatori e impronte degli indirizzi per i limiti; i record scaduti sono rimossi
-alle richieste successive. SLPS_RATE_DB_PATH deve stare su un volume persistente se i limiti
-devono sopravvivere ai redeploy. Un solo server applicativo è supportato in questa fase.
-Non è ancora implementata una cronologia dei casi, il controllo multi-azienda o la chiusura
-documentata delle misure. Non usarlo come archivio aziendale.
+SQLite conserva anche contatori e impronte degli indirizzi per i limiti; i record scaduti
+sono rimossi alle richieste successive. SLPS_RATE_DB_PATH e SLPS_CASE_DB_PATH devono stare
+su un volume persistente se limiti e casi devono sopravvivere ai redeploy. Un solo server
+applicativo è supportato in questa fase.
+L'isolamento applicativo per azienda/proprietario è implementato e coperto da test, ma il
+pilota espone ancora un solo account configurato dal server. Mancano gestione account,
+assegnazione e chiusura delle misure, backup/ripristino e verifica di persistenza sul provider.
+Non usarlo ancora come archivio aziendale di produzione.
 
 ## Verifica
 Installa requirements-dev.txt ed esegui:
@@ -79,8 +89,8 @@ credito, disponibilità del modello o persistenza effettiva del volume.
 ## Prima del rilascio commerciale
 1. Prova completa con API attiva e modello scelto: foto → analisi → chiarimento → riesame.
 2. Fonti normative controllate e tracciabili, con verifica di pertinenza.
-3. Casi persistenti, assegnazione delle misure, evidenze e conferma della chiusura.
-4. Separazione fra aziende, cancellazione e backup/ripristino verificati.
+3. Interfaccia cronologia, assegnazione delle misure, evidenze e conferma della chiusura.
+4. Gestione account, cancellazione e backup/ripristino verificati sull'hosting.
 5. Casi di accettazione definiti dal responsabile SLPS, inclusi alcuni casi reali non usati per modificare il metodo.
 6. Prezzo sulla base di costi misurati, condizioni, informativa e assistenza.
 7. Prova con pochi clienti prima di ampliare l'accesso.

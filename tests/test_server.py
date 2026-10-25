@@ -1,5 +1,6 @@
 import io
 from pathlib import Path
+import sqlite3
 
 from PIL import Image
 import pytest
@@ -23,6 +24,9 @@ def app(tmp_path, monkeypatch):
         "PILOT_PASSWORD": "test-password-16-chars",
         "SESSION_COOKIE_SECURE": False,
         "RATE_DB_PATH": str(tmp_path / "limits.sqlite3"),
+        "CASE_DB_PATH": str(tmp_path / "cases.sqlite3"),
+        "PILOT_TENANT_ID": "tenant-a",
+        "PILOT_OWNER_ID": "owner-a",
         "ANALYSES_PER_HOUR": 2,
     })
 
@@ -132,10 +136,149 @@ def test_file_bytes_reach_provider_and_filename_is_never_written(client, tmp_pat
     assert response.status_code == 200
     assert response.json["analysis"]["summary"] == "test"
     assert response.json["image"] == {"width": 48, "height": 32}
+    assert response.json["archive"]["saved"] is True
     assert seen["mime"] == "image/jpeg"
     assert seen["context"] == "Contesto fornito"
     assert Image.open(io.BytesIO(seen["raw"])).size == (48, 32)
     assert not target.exists()
+
+
+def test_analysis_is_archived_without_photograph(client, app, monkeypatch):
+    token = login(client).json["csrf"]
+    monkeypatch.setattr(
+        server,
+        "analizza_immagine",
+        lambda *_args: {"summary": "Caso archiviato", "findings": []},
+    )
+    response = post_image(client, token, context="Solo informazioni necessarie")
+    case_id = response.json["archive"]["case_id"]
+
+    listing = client.get("/api/cases", headers={"X-CSRF-Token": token})
+    assert listing.status_code == 200
+    assert len(listing.json["cases"]) == 1
+    assert listing.json["cases"][0]["id"] == case_id
+    assert listing.json["cases"][0]["context"] == "Solo informazioni necessarie"
+    assert listing.json["cases"][0]["summary"] == "Caso archiviato"
+    saved = client.get("/api/cases/" + case_id, headers={"X-CSRF-Token": token})
+    assert saved.status_code == 200
+    assert saved.json["case"]["analysis"]["summary"] == "Caso archiviato"
+    assert "image" not in saved.json["case"]
+    assert photo() not in Path(app.config["CASE_DB_PATH"]).read_bytes()
+
+
+def test_case_routes_deny_cross_tenant_and_cross_owner(app, monkeypatch):
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: {"summary": "Privato", "findings": []})
+    tenant_a = app.test_client()
+    token_a = login(tenant_a).json["csrf"]
+    case_id = post_image(tenant_a, token_a).json["archive"]["case_id"]
+
+    tenant_b_app = server.create_app({
+        **dict(app.config),
+        "PILOT_TENANT_ID": "tenant-b",
+        "PILOT_OWNER_ID": "owner-b",
+    })
+    tenant_b = tenant_b_app.test_client()
+    token_b = login(tenant_b).json["csrf"]
+    assert tenant_b.get("/api/cases", headers={"X-CSRF-Token": token_b}).json["cases"] == []
+    foreign = tenant_b.get("/api/cases/" + case_id, headers={"X-CSRF-Token": token_b})
+    missing = tenant_b.get("/api/cases/missing-case", headers={"X-CSRF-Token": token_b})
+    assert (foreign.status_code, foreign.json) == (missing.status_code, missing.json)
+    assert (foreign.status_code, foreign.json) == (
+        404,
+        {"error": {"code": "case_not_found", "message": "Caso non disponibile."}},
+    )
+    foreign_delete = tenant_b.delete("/api/cases/" + case_id, headers={"X-CSRF-Token": token_b})
+    missing_delete = tenant_b.delete("/api/cases/missing-case", headers={"X-CSRF-Token": token_b})
+    assert (foreign_delete.status_code, foreign_delete.json) == (
+        missing_delete.status_code,
+        missing_delete.json,
+    )
+    assert foreign_delete.status_code == 404
+
+    owner_b_app = server.create_app({
+        **dict(app.config),
+        "PILOT_TENANT_ID": "tenant-a",
+        "PILOT_OWNER_ID": "owner-b",
+    })
+    owner_b = owner_b_app.test_client()
+    token_owner_b = login(owner_b).json["csrf"]
+    assert owner_b.get("/api/cases/" + case_id, headers={"X-CSRF-Token": token_owner_b}).status_code == 404
+
+    assert tenant_a.get("/api/cases/" + case_id, headers={"X-CSRF-Token": token_a}).status_code == 200
+
+
+def test_owner_can_delete_only_own_case(client, monkeypatch):
+    token = login(client).json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: {"summary": "Elimina", "findings": []})
+    case_id = post_image(client, token).json["archive"]["case_id"]
+    assert client.delete("/api/cases/" + case_id, headers={"X-CSRF-Token": token}).json == {"deleted": True}
+    assert client.get("/api/cases/" + case_id, headers={"X-CSRF-Token": token}).status_code == 404
+
+
+def test_case_routes_require_authentication_and_delete_requires_csrf(client, monkeypatch):
+    assert client.get("/api/cases").status_code == 401
+    assert client.get("/api/cases/missing-case").status_code == 401
+    assert client.delete("/api/cases/missing-case").status_code == 401
+
+    token = login(client).json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: {"summary": "Protetto", "findings": []})
+    case_id = post_image(client, token).json["archive"]["case_id"]
+    assert client.delete("/api/cases/" + case_id).status_code == 403
+    assert client.get("/api/cases/" + case_id, headers={"X-CSRF-Token": token}).status_code == 200
+
+
+def test_archive_failure_preserves_paid_analysis_and_releases_lease(client, app, monkeypatch):
+    token = login(client).json["csrf"]
+    calls = []
+    monkeypatch.setattr(
+        server,
+        "analizza_immagine",
+        lambda *_args: calls.append(1) or {"summary": "Analisi riuscita", "findings": []},
+    )
+    monkeypatch.setattr(
+        app.extensions["case_store"],
+        "create",
+        lambda *_args: (_ for _ in ()).throw(sqlite3.OperationalError("private-db-detail")),
+    )
+
+    response = post_image(client, token)
+    assert response.status_code == 200
+    assert response.json["analysis"]["summary"] == "Analisi riuscita"
+    assert response.json["archive"] == {
+        "saved": False,
+        "case_id": None,
+        "message": "Risultato non archiviato per un problema temporaneo.",
+    }
+    assert "private-db-detail" not in response.text
+    assert calls == [1]
+    lease, reason = app.extensions["limit_store"].reserve_analysis(10, 180)
+    assert lease and reason is None
+    app.extensions["limit_store"].release_analysis(lease)
+
+
+def test_case_limit_preserves_analysis_but_reports_unsaved(app, monkeypatch):
+    app.config["MAX_CASES_PER_OWNER"] = 1
+    app.config["ANALYSES_PER_HOUR"] = 10
+    client = app.test_client()
+    token = login(client).json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: {"summary": "Limite", "findings": []})
+    assert post_image(client, token).json["archive"]["saved"] is True
+    second = post_image(client, token)
+    assert second.status_code == 200
+    assert second.json["analysis"]["summary"] == "Limite"
+    assert second.json["archive"]["saved"] is False
+    assert "Archivio pieno" in second.json["archive"]["message"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("PILOT_TENANT_ID", "../other"),
+    ("PILOT_OWNER_ID", ""),
+    ("PILOT_OWNER_ID", "x" * 65),
+])
+def test_invalid_archive_principal_fails_closed(app, field, value):
+    app.config[field] = value
+    client = app.test_client()
+    assert client.get("/api/session").json["auth_configured"] is False
 
 
 def test_large_multipart_upload_never_spools_to_disk(app):
