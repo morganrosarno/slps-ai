@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from source_registry import read_registry, public_source
 from jsonschema import Draft202012Validator
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, OpenAI, RateLimitError
 
@@ -89,25 +89,7 @@ def load_sources() -> list[dict]:
     if not path:
         return []
     try:
-        raw = Path(path).read_bytes()
-        if len(raw) > 200_000:
-            raise ValueError()
-        sources = json.loads(raw)
-        if not isinstance(sources, list) or len(sources) > 30:
-            raise ValueError()
-        ids = set()
-        for s in sources:
-            for key in ("id", "title", "url", "verified_at", "excerpt"):
-                if not isinstance(s.get(key), str) or not s[key].strip():
-                    raise ValueError()
-            u = urlparse(s["url"])
-            if u.scheme != "https" or not u.hostname or u.username or u.password:
-                raise ValueError()
-            if s["id"] in ids or len(s["excerpt"]) > 20_000:
-                raise ValueError()
-            datetime.fromisoformat(s["verified_at"].replace("Z", "+00:00"))
-            ids.add(s["id"])
-        return sources
+        return read_registry(Path(path))
     except (OSError, ValueError, TypeError, AttributeError):
         raise AnalysisError("sources_invalid", "Il registro delle fonti richiede una verifica.", 503) from None
 
@@ -143,7 +125,7 @@ def validate_analysis(data: dict, sources: list[dict]) -> dict:
         data["limitations"].append("Riferimenti non riscontrati nel registro esclusi: la base normativa resta da verificare.")
     if not sources:
         data["limitations"].append("Questo pilota non ha fonti normative verificate collegate al caso. I riferimenti generali richiedono verifica prima dell'uso professionale.")
-    data["sources"] = [{k: s[k] for k in ("id", "title", "url", "verified_at")} for s in sources]
+    data["sources"] = [public_source(s) for s in sources]
     data["needs_clarification"] = (any(f["critical_unknown"] or f["risk"] == "undetermined" for f in data["findings"])
                                    or any(q["critical"] for q in data["questions"]) or not data["findings"])
     return data

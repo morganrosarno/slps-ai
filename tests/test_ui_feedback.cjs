@@ -901,3 +901,24 @@ test('invalid synthetic response after committed trial does not render or sugges
   assert.doesNotMatch(f.$('video-synthetic-status').textContent, /utilizzo della prova non è confermato/i);
   assert.equal(f.requests.length, 0);
 });
+
+test('classified source details remain visible, contextual and safe in every report language', async () => {
+  const labels = {it:['Obbligo nella fonte','Raccomandazione nella fonte','Ipotesi da verificare','Non classificato'],de:['Pflicht in der Quelle','Empfehlung in der Quelle','Zu prüfende Annahme','Nicht eingestuft'],fr:['Obligation dans la source','Recommandation dans la source','Hypothèse à vérifier','Non classé'],en:['Obligation in the source','Recommendation in the source','Hypothesis to verify','Unclassified']};
+  for (const locale of ['it','de','fr','en']) {
+    const f = await fixture({initialLocale:locale}); f.photo(); await f.submit();
+    await f.finish({analysis:{...report(),sources:[
+      {id:'law',title:'General duty',url:'https://www.fedlex.admin.ch/eli/cc/1983/1968_1968_1968/it',verified_at:'2026-10-26',classification:'obligation',locator:'Art. 3',scope:'Check applicability to the actual case',document_version:'2026-01-01',registry_version:'1.0',limitations:['<script>not executable</script>']},
+      {id:'guide',title:'Guide',url:'https://www.suva.ch/guide',classification:'recommendation'},
+      {id:'idea',title:'Assumption',url:'https://www.seco.admin.ch/',classification:'hypothesis'},
+      {id:'old',title:'Old saved reference',url:'javascript:alert(1)',classification:'constructor',scope:{untrusted:'object'},limitations:'not an array'}
+    ]}});
+    const text = f.$('sources').textContent;
+    for(const label of labels[locale]) assert.ok(text.includes(label),locale+': '+label);
+    for(const expected of ['Art. 3','2026-10-26','2026-01-01','1.0','Check applicability','<script>not executable</script>']) assert.ok(text.includes(expected));
+    assert.equal(f.$('sources').querySelectorAll('script').length,0);
+    assert.equal(f.$('sources').querySelectorAll('a').length,3);
+    assert.equal(text.includes('[object Object]'),false);
+    assert.equal(text.includes('constructor'),false);
+    assert.ok(text.includes(f.i18n.messages[locale].sourceContext));
+  }
+});

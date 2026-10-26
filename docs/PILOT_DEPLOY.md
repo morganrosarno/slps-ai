@@ -24,6 +24,9 @@ Caricare il master approvato come **file segreto** nel percorso
 `SLPS_PROMPT_PATH` sullo stesso percorso. Il file non deve entrare nel
 repository. Se viene usato un registro privato delle fonti, caricarlo come file
 segreto e indicarlo con `SLPS_SOURCES_PATH`.
+Il registro tecnico pubblico incluso nel codice può invece essere selezionato
+con il percorso assoluto di `data/sources.ch.v1.json`; leggere prima ambito e
+limiti in `docs/SOURCE_REGISTRY.md`. Non contiene il master né dati dei casi.
 
 Impostare inoltre:
 

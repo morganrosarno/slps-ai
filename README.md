@@ -79,8 +79,14 @@ Un file diverso viene rifiutato; gli aggiornamenti richiedono approvazione e una
 
 ## Fonti
 Il pilota non naviga sul web. Non contiene ancora il recupero automatico delle fonti normative.
-SLPS_SOURCES_PATH può indicare un registro JSON mantenuto e verificato dal proprietario:
-lista di oggetti con id, title, url HTTPS, verified_at ISO e excerpt pertinente.
+SLPS_SOURCES_PATH può indicare un registro JSON mantenuto e verificato dal proprietario.
+Il registro versionato `data/sources.ch.v1.json` contiene sette proposizioni
+generali da Fedlex, SECO, CFSL e Suva consultate il 26 ottobre 2026, con ambito, versione
+del documento e distinzione tra obbligo e raccomandazione. Il formato supporta
+anche ipotesi applicative esplicitamente distinte dalle conclusioni dell'autorità.
+Vedi [contratto e limiti delle fonti](docs/SOURCE_REGISTRY.md), inclusa la distinzione
+tra testo normativo Fedlex e commenti delle autorità. Sono compatibili anche liste legacy con id, title, url HTTPS,
+verified_at ISO e excerpt; senza classificazione normativa verificata.
 Nessuna fonte è inclusa per default. La data indica la verifica dichiarata nel registro;
 non dimostra un nuovo controllo online a ogni analisi.
 Il server elimina riferimenti del modello non presenti nel registro.

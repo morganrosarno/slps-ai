@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "registry_version": "2026-10-26.2",
+  "jurisdiction": "CH",
+  "sources": [
+    {
+      "verified_at": "2026-10-26",
+      "verification_scope": "Contenuto della fonte primaria consultato il 26 ottobre 2026; non verifica professionale del singolo caso.",
+      "id": "CFSL-6508-MSSL",
+      "title": "CFSL 6508: individuazione dei pericoli e ricorso agli specialisti",
+      "url": "https://www.ekas.admin.ch/fileadmin/Dokumente/Richtlinien/gueltig/06508_i_2025_10_23.pdf",
+      "excerpt": "Il datore di lavoro individua i pericoli e riesamina le misure. Il ricorso agli specialisti dipende dalla presenza di pericoli particolari e dall’assenza delle conoscenze necessarie; gli obblighi organizzativi variano anche con la dimensione aziendale.",
+      "classification": "obligation",
+      "source_kind": "authority_guidance",
+      "publisher": "CFSL",
+      "locator": "Premessa p. 3; capitolo 2 p. 4; capitolo 3 p. 5",
+      "scope": "Aziende nel campo di applicazione OPI; condizioni del capitolo 2 e dimensioni del capitolo 3 da accertare.",
+      "document_version": "Stato 23 ottobre 2025; edizione 11.25",
+      "limitations": [
+        "La direttiva concretizza l’OPI e non ne amplia il campo di applicazione.",
+        "Non significa che ogni PMI debba sempre incaricare uno specialista.",
+        "L’allegato sui pericoli particolari non è un elenco esaustivo di tutti i pericoli."
+      ]
+    },
+    {
+      "verified_at": "2026-10-26",
+      "verification_scope": "Contenuto della fonte primaria consultato il 26 ottobre 2026; non verifica professionale del singolo caso.",
+      "id": "SECO-HEALTH-GENERAL",
+      "title": "SECO: salute e sollecitazioni sul posto di lavoro",
+      "url": "https://www.seco.admin.ch/it/salute-e-sollecitazioni-sul-posto-di-lavoro",
+      "excerpt": "La tutela della salute dei lavoratori rientra negli obblighi del datore di lavoro. La SECO richiama l’articolo 6 LL e l’articolo 2 OLL 3, includendo la salute fisica e psichica.",
+      "classification": "obligation",
+      "source_kind": "authority_guidance",
+      "publisher": "SECO",
+      "locator": "Introduzione, primi due paragrafi",
+      "scope": "Applicabilità della legge sul lavoro e dell’OLL 3 all’azienda da verificare.",
+      "document_version": "Pagina senza data di revisione visibile al 26 ottobre 2026",
+      "limitations": [
+        "Sintesi informativa dell’autorità: non è il testo consolidato della legge.",
+        "Una foto non dimostra diagnosi né condizioni individuali di salute."
+      ]
+    },
+    {
+      "verified_at": "2026-10-26",
+      "verification_scope": "Contenuto della fonte primaria consultato il 26 ottobre 2026; non verifica professionale del singolo caso.",
+      "id": "SECO-OLL3-ART2-COMMENT",
+      "title": "SECO: indicazioni applicative OLL 3, articolo 2",
+      "url": "https://www.seco.admin.ch/dam/it/sd-web/oXmAmkrCvsg7/ArGV3-Artikel-02-SECO-AB-2016-IT.pdf",
+      "excerpt": "Il commento SECO invita a considerare insieme gli aspetti individuali, tecnici, organizzativi e sociali, dando priorità alle misure collettive e fornendo istruzioni appropriate.",
+      "classification": "recommendation",
+      "source_kind": "authority_guidance",
+      "publisher": "SECO",
+      "locator": "Pagina 302-2, principi applicativi 7–9",
+      "scope": "Indicazioni applicative sulla tutela della salute; questa scheda descrive il commento, non introduce una nuova prescrizione.",
+      "document_version": "SECO dicembre 2015; link ufficiale datato 30 marzo 2016",
+      "limitations": [
+        "Documento storico ancora collegato dalla pagina ufficiale consultata; nessuna revisione 2026 dichiarata.",
+        "Il testo dell’articolo e il commento hanno natura diversa; la classificazione riguarda soltanto il commento qui parafrasato."
+      ]
+    },
+    {
+      "verified_at": "2026-10-26",
+      "verification_scope": "Contenuto della fonte primaria consultato il 26 ottobre 2026; non verifica professionale del singolo caso.",
+      "id": "SUVA-DPI-PRIORITIES",
+      "title": "Suva: quando e dove sono necessari i DPI",
+      "url": "https://www.suva.ch/it-ch/prevenzione/regole-vitali-e-disposizioni/sicurezza-ottimale-con-i-dispositivi-di-protezione-individuale/quando-sono-necessari-i-dpi",
+      "excerpt": "Prima dei dispositivi individuali, valutare alternative che eliminino il pericolo o lo riducano mediante protezioni tecniche e organizzative. Eccezioni e obblighi specifici dipendono dall’attività e dall’esposizione.",
+      "classification": "recommendation",
+      "source_kind": "technical_guidance",
+      "publisher": "Suva",
+      "locator": "L’essenziale in breve; I DPI sono utili, ma le misure tecniche e organizzative sono prioritarie; Eccezioni",
+      "scope": "Scelta di misure in base a una valutazione concreta del posto di lavoro.",
+      "document_version": "Pagina senza data di revisione visibile al 26 ottobre 2026",
+      "limitations": [
+        "La pagina non dimostra che un DPI specifico sia obbligatorio nella situazione fotografata.",
+        "Per prescrizioni settoriali occorrono i riferimenti applicabili e i dati dell’attività."
+      ]
+    },
+    {
+      "verified_at": "2026-10-26",
+      "verification_scope": "Contenuto della fonte primaria consultato il 26 ottobre 2026; non verifica professionale del singolo caso.",
+      "id": "CFSL-HAZARD-EXAMPLES",
+      "title": "CFSL: individuazione dei pericoli",
+      "url": "https://www.ekas.admin.ch/it/sicurezza-sul-lavoro-e-protezione-della-salute/informazioni-per-i-datori-di-lavoro/individuazione-dei-pericoli",
+      "excerpt": "L’individuazione considera attività e pericoli presenti: per esempio ostacoli nei passaggi, superfici scivolose, movimenti ripetitivi e posture forzate. Gli esempi aiutano a formulare verifiche mirate e non sostituiscono la valutazione concreta.",
+      "classification": "recommendation",
+      "source_kind": "authority_guidance",
+      "publisher": "CFSL",
+      "locator": "Introduzione; Pericolo di cadute e inciampi; Sollecitazioni all’apparato locomotore",
+      "scope": "Guida informativa non esaustiva per l’individuazione dei pericoli.",
+      "document_version": "Pagina senza data di revisione visibile al 26 ottobre 2026",
+      "limitations": [
+        "La presenza di un esempio nella guida non dimostra un pericolo concreto nella foto.",
+        "Frequenza, durata, esposizioni e misure esistenti richiedono informazioni aggiuntive."
+      ]
+    },
+    {
+      "verified_at": "2026-10-26",
+      "classification": "obligation",
+      "source_kind": "law",
+      "publisher": "Confederazione Svizzera — Fedlex",
+      "document_version": "OPI RS 832.30; versione 1 maggio 2018, indicata in vigore al 26 ottobre 2026",
+      "verification_scope": "Testo degli articoli e metadati di vigenza/versione letti direttamente su Fedlex il 26 ottobre 2026 tramite browser; non verifica professionale del singolo caso.",
+      "scope": "Campo di applicazione OPI secondo articolo 1, con eccezioni e delimitazioni dell’articolo 2 da verificare per azienda e attività.",
+      "id": "FEDLEX-OPI-ART3",
+      "title": "OPI articolo 3: misure e installazioni di protezione",
+      "url": "https://www.fedlex.admin.ch/eli/cc/1983/1968_1968_1968/it#art_3",
+      "locator": "Articolo 3 capoversi 1, 2 e 3 (non capoverso 1bis)",
+      "excerpt": "Il datore di lavoro adotta le protezioni richieste dall’OPI, dalle prescrizioni applicabili all’azienda e dalle norme riconosciute di tecnica della sicurezza e medicina del lavoro. Ne controlla l’efficacia a intervalli adeguati e le adatta quando cambiano costruzioni, attrezzature, procedimenti o sostanze utilizzate.",
+      "limitations": [
+        "Una fotografia non prova l’assenza o l’inefficacia delle misure né una violazione.",
+        "Gli intervalli di controllo non sono fissati da questa scheda: vanno determinati per le condizioni effettive.",
+        "Restano salvi i procedimenti di approvazione dei piani e permesso di esercizio richiamati dal capoverso 3."
+      ]
+    },
+    {
+      "verified_at": "2026-10-26",
+      "classification": "obligation",
+      "source_kind": "law",
+      "publisher": "Confederazione Svizzera — Fedlex",
+      "document_version": "OPI RS 832.30; versione 1 maggio 2018, indicata in vigore al 26 ottobre 2026",
+      "verification_scope": "Testo degli articoli e metadati di vigenza/versione letti direttamente su Fedlex il 26 ottobre 2026 tramite browser; non verifica professionale del singolo caso.",
+      "scope": "Campo di applicazione OPI secondo articolo 1, con eccezioni e delimitazioni dell’articolo 2 da verificare per azienda e attività.",
+      "id": "FEDLEX-OPI-ART5",
+      "title": "OPI articolo 5: dispositivi di protezione individuale",
+      "url": "https://www.fedlex.admin.ch/eli/cc/1983/1968_1968_1968/it#art_5",
+      "locator": "Articolo 5 capoversi 1 e 2",
+      "excerpt": "Quando misure tecniche od organizzative non consentono di escludere del tutto o in parte i rischi, il datore di lavoro fornisce DPI efficaci, il cui uso sia ragionevolmente esigibile, pronti e in perfetto stato. Se più DPI sono necessari contemporaneamente, deve assicurarne la compatibilità senza comprometterne l’efficacia.",
+      "limitations": [
+        "La scelta di un DPI specifico richiede la valutazione del rischio e delle misure tecniche od organizzative effettive.",
+        "La sola foto non accerta la condizione prevista dall’articolo né dimostra una violazione."
+      ]
+    }
+  ]
+}

@@ -14,12 +14,14 @@ import re
 import sqlite3
 import stat
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from source_registry import read_registry
 MASTER_SHA256 = "88a1077d86f78ee1102031739a5a1d1fcfb3750f2aa81639af528b7db8da97b7"
 EXPECTED_START = "gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --threads 1 --timeout 120"
 PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -43,26 +45,7 @@ def check(check_id: str, ok: bool, message_ok: str, message_fail: str, *, level:
 
 
 def source_registry(path: Path) -> tuple[bool, int]:
-    raw = path.read_bytes()
-    if len(raw) > 200_000:
-        return False, 0
-    sources = json.loads(raw)
-    if not isinstance(sources, list) or len(sources) > 30:
-        return False, 0
-    ids: set[str] = set()
-    for source in sources:
-        if not isinstance(source, dict):
-            return False, 0
-        for key in ("id", "title", "url", "verified_at", "excerpt"):
-            if not isinstance(source.get(key), str) or not source[key].strip():
-                return False, 0
-        url = urlparse(source["url"])
-        if url.scheme != "https" or not url.hostname or url.username or url.password:
-            return False, 0
-        if source["id"] in ids or len(source["excerpt"]) > 20_000:
-            return False, 0
-        datetime.fromisoformat(source["verified_at"].replace("Z", "+00:00"))
-        ids.add(source["id"])
+    sources = read_registry(path)
     return True, len(sources)
 
 

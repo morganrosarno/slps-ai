@@ -10,6 +10,7 @@ import copy
 import math
 import time
 from urllib.parse import urlsplit
+from source_registry import BASE_KEYS, DETAIL_KEYS, public_source, validate_registry
 
 
 class VideoAnalysisError(ValueError):
@@ -56,6 +57,17 @@ def _sources(registry):
             datetime.fromisoformat(source["verified_at"].replace("Z", "+00:00"))
         except ValueError:
             _fail()
+        if any(key in item for key in DETAIL_KEYS | {"registry_version"}):
+            try:
+                # Validate the same provenance contract as the photo pipeline.
+                # Excerpts are not sent through the video/report public boundary.
+                entry = {key: item.get(key) for key in BASE_KEYS | DETAIL_KEYS}
+                entry["excerpt"] = item.get("excerpt", "Provenance metadata only")
+                normalized = validate_registry({"schema_version": 1,
+                    "registry_version": item.get("registry_version"), "jurisdiction": "CH", "sources": [entry]})
+                source = public_source(normalized[0])
+            except (ValueError, TypeError):
+                _fail()
         seen.add(source["id"])
         clean.append(source)
     return clean

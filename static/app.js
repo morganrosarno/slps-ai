@@ -52,6 +52,58 @@
   Object.assign(languageOverrides.de, { archiveFullExisting:'Archivspeicher voll: Bestehende Fälle bleiben verfügbar.', sessionReloadLoss:'Sitzung abgelaufen und erneute Anmeldung nicht verfügbar. Laden Sie die Seite neu. Der lokale Bericht bleibt bis dahin sichtbar, geht beim Neuladen aber verloren.' });
   Object.assign(languageOverrides.fr, { archiveFullExisting:'Espace de l’historique saturé : les dossiers existants restent disponibles.', sessionReloadLoss:'Session expirée et nouvelle connexion indisponible. Rechargez la page. Le rapport local reste visible jusque-là, mais sera perdu au rechargement.' });
   Object.assign(languageOverrides.en, { archiveFullExisting:'History storage is full: existing cases remain available.', sessionReloadLoss:'Session expired and a new sign-in is unavailable. Reload the page. The local report remains visible until then but will be lost on reload.' });
+  const sourceTranslations = {
+  "it": {
+    "sourceObligation": "Obbligo nella fonte",
+    "sourceRecommendation": "Raccomandazione nella fonte",
+    "sourceHypothesis": "Ipotesi da verificare",
+    "sourceUnclassified": "Non classificato · da verificare",
+    "sourceContext": "La classificazione riguarda il contenuto citato. L’applicabilità alla situazione va verificata: il solo riferimento non dimostra una violazione o la conformità.",
+    "sourceLocator": "Riferimento preciso: {value}",
+    "sourceScope": "Ambito: {value}",
+    "sourceVersion": "Versione del documento: {value}",
+    "sourceRegistry": "Registro fonti: {value}",
+    "sourceLimits": "Limiti del riferimento"
+  },
+  "de": {
+    "sourceObligation": "Pflicht in der Quelle",
+    "sourceRecommendation": "Empfehlung in der Quelle",
+    "sourceHypothesis": "Zu prüfende Annahme",
+    "sourceUnclassified": "Nicht eingestuft · zu prüfen",
+    "sourceContext": "Die Einstufung betrifft den zitierten Inhalt. Die Anwendbarkeit auf die Situation ist zu prüfen: Der Verweis allein belegt weder einen Verstoss noch die Konformität.",
+    "sourceLocator": "Genaue Fundstelle: {value}",
+    "sourceScope": "Geltungsbereich: {value}",
+    "sourceVersion": "Dokumentversion: {value}",
+    "sourceRegistry": "Quellenregister: {value}",
+    "sourceLimits": "Grenzen des Verweises"
+  },
+  "fr": {
+    "sourceObligation": "Obligation dans la source",
+    "sourceRecommendation": "Recommandation dans la source",
+    "sourceHypothesis": "Hypothèse à vérifier",
+    "sourceUnclassified": "Non classé · à vérifier",
+    "sourceContext": "La classification concerne le contenu cité. Son application à la situation doit être vérifiée : la référence seule ne prouve ni une infraction ni la conformité.",
+    "sourceLocator": "Passage précis : {value}",
+    "sourceScope": "Champ d’application : {value}",
+    "sourceVersion": "Version du document : {value}",
+    "sourceRegistry": "Registre des sources : {value}",
+    "sourceLimits": "Limites de la référence"
+  },
+  "en": {
+    "sourceObligation": "Obligation in the source",
+    "sourceRecommendation": "Recommendation in the source",
+    "sourceHypothesis": "Hypothesis to verify",
+    "sourceUnclassified": "Unclassified · verify before use",
+    "sourceContext": "The classification concerns the cited content. Its applicability to the situation must be checked: the reference alone proves neither a breach nor compliance.",
+    "sourceLocator": "Exact reference: {value}",
+    "sourceScope": "Scope: {value}",
+    "sourceVersion": "Document version: {value}",
+    "sourceRegistry": "Source registry: {value}",
+    "sourceLimits": "Reference limitations"
+  }
+};
+  Object.assign(messages.it, sourceTranslations.it);
+  for (const language of ['de', 'fr', 'en']) Object.assign(languageOverrides[language], sourceTranslations[language]);
   const syntheticVideoTranslations = {
     it: {
       syntheticAction:'Avvia collaudo sintetico video e audio',syntheticOnly:'Risultato di collaudo sintetico: non è un’analisi AI reale.',syntheticConsumes:'Questo collaudo privato usa risposte simulate. Se completato, utilizza l’unica prova aziendale; nessun servizio AI reale viene chiamato.',syntheticRunning:'Collaudo sintetico in corso…',syntheticComplete:'Rapporto video sintetico salvato',syntheticCoverage:'Copertura: {count} fotogrammi su {seconds} secondi. Sono campioni temporali, non una visione continua del video.',syntheticSpoken:'Parlato dichiarato, distinto dalle evidenze visive',syntheticTranscriptAvailable:'Trascrizione sintetica disponibile',syntheticTranscriptUnknown:'Il parlato non è comprensibile: restano informazioni da chiarire.',syntheticTranscriptNA:'Trascrizione non applicabile allo stato audio rilevato.',syntheticAudio:'Stato audio: {status}',syntheticNoAmbient:'I rumori ambientali e i livelli acustici non sono stati analizzati.',syntheticFrame:'Fotogramma campionato a {seconds} s',syntheticSourceMissing:'Il caso sorgente o le sue evidenze non sono disponibili. Il rapporto resta consultabile, ma i fotogrammi non possono essere mostrati.',syntheticQuestionNote:'Domande da chiarire sul posto. Questo collaudo video non consente una nuova analisi delle risposte.',syntheticOpenSaved:'Apri il rapporto salvato',syntheticQuotaUnknown:'Il rapporto è stato salvato, ma l’utilizzo della prova non è confermato. Non avviare altre analisi finché il conteggio non è verificato.',syntheticQuotaUsed:'Rapporto salvato e prova aziendale utilizzata. Nessuna nuova prova è disponibile; lo stato dettagliato della quota non è temporaneamente consultabile.',syntheticUnavailable:'Il percorso sintetico non è disponibile o il limite di richieste è stato raggiunto. Nessuna nuova elaborazione è stata confermata.',syntheticFailure:'Il collaudo sintetico non ha prodotto un nuovo rapporto confermato.',syntheticFrameMissing:'Il fotogramma associato a questo rilievo non è disponibile.',syntheticOpenFrame:'Apri il fotogramma',syntheticVisible:'Visibile nel fotogramma campionato',syntheticCropCaption:'Dettaglio del rilievo {id} · {seconds} s',syntheticUnknownNetwork:'L’esito della richiesta non è confermato. Prima di riprovare, verificare l’archivio e il conteggio della prova.',syntheticHistory:'Rapporto video di collaudo sintetico · nessuna analisi AI reale'
@@ -820,7 +872,26 @@
     if (Array.isArray(analysis.limitations) && analysis.limitations.length) { $('limitations').append(make('h3', t('remaining'))); const list = make('ul'); analysis.limitations.forEach(item => list.append(make('li', item))); $('limitations').append(list); }
     $('sources').replaceChildren(); $('sources').append(make('h3', t('sources')));
     if (analysis.sources?.length) {
-      const list = make('ul'); analysis.sources.forEach(source => { const li = make('li'); const url = validUrl(source.url), link = make(url ? 'a' : 'span', source.title); if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; } li.append(link); if (source.verified_at) li.append(document.createTextNode(' · ' + t('verified', { date: source.verified_at }))); list.append(li); }); $('sources').append(list);
+      $('sources').append(make('p', t('sourceContext'), 'source-context'));
+      const list = make('ul', null, 'source-list');
+      const classifications = { obligation: 'sourceObligation', recommendation: 'sourceRecommendation', hypothesis: 'sourceHypothesis' };
+      analysis.sources.forEach(source => {
+        const li = make('li', null, 'source-item');
+        const url = validUrl(source.url), link = make(url ? 'a' : 'span', source.title);
+        if (url) { link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+        li.append(link, make('p', t(Object.hasOwn(classifications, source.classification) ? classifications[source.classification] : 'sourceUnclassified'), 'source-classification'));
+        if (typeof source.verified_at === 'string' && source.verified_at) li.append(make('p', t('verified', { date: source.verified_at }), 'source-metadata'));
+        [['locator', 'sourceLocator'], ['scope', 'sourceScope'], ['document_version', 'sourceVersion'], ['registry_version', 'sourceRegistry']].forEach(([field, key]) => {
+          if (typeof source[field] === 'string' && source[field].trim()) li.append(make('p', t(key, { value: source[field] }), 'source-metadata'));
+        });
+        const limits = Array.isArray(source.limitations) ? source.limitations.filter(value => typeof value === 'string' && value.trim()) : [];
+        if (limits.length) {
+          li.append(make('p', t('sourceLimits'), 'source-limits-label'));
+          const items = make('ul'); limits.forEach(value => items.append(make('li', value))); li.append(items);
+        }
+        list.append(li);
+      });
+      $('sources').append(list);
     } else $('sources').append(make('p', t('noSources')));
     const parts = [];
     if (meta.method_version || meta.prompt_version) parts.push(t('method', { value: meta.method_version || meta.prompt_version })); if (meta.model) parts.push(t('model', { value: meta.model })); if (meta.created_at) parts.push(t('analysisMeta', { value: meta.created_at }));
