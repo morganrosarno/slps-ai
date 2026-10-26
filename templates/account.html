@@ -66,6 +66,29 @@
         </ol>
         <p id="verification-pending-note" class="notice neutral" data-i18n="pendingNote">Le analisi e l'archivio rimangono bloccati fino al completamento di tutti i controlli.</p>
         <p id="delivery-note" class="field-note" data-i18n="deliveryNote">Pilota locale: l'invio delle email di conferma non è configurato. Nessuna email è stata inviata da questa schermata; la conferma email e la verifica aziendale devono essere completate tramite una procedura abilitata.</p>
+        <section id="consultation-panel" class="consultation-panel" aria-labelledby="consultation-heading" hidden>
+          <h3 id="consultation-heading" data-i18n="consultationTitle">Contatto con uno specialista</h3>
+          <p class="field-note" data-i18n="consultationDraft">Disponibilità sperimentale separata dalla fatturazione. Nomi, prezzi e regole commerciali non sono definitivi.</p>
+          <button id="consultation-load" class="button secondary" type="button" data-i18n="consultationLoad">Mostra disponibilità</button>
+          <div id="consultation-content" hidden>
+            <dl class="consultation-ledger">
+              <div><dt data-i18n="consultationIncluded">Incluse</dt><dd id="consultation-included">0</dd></div>
+              <div><dt data-i18n="consultationReserved">Prenotate</dt><dd id="consultation-reserved">0</dd></div>
+              <div><dt data-i18n="consultationUsed">Utilizzate</dt><dd id="consultation-used">0</dd></div>
+              <div><dt data-i18n="consultationBalance">Disponibili</dt><dd id="consultation-balance">0</dd></div>
+            </dl>
+            <p id="consultation-availability" class="notice neutral" aria-live="polite"></p>
+            <p class="field-note"><span data-i18n="consultationRenewal">Prossimo rinnovo:</span> <time id="consultation-next-reset"></time></p>
+            <form id="consultation-form">
+              <div class="field"><label for="consultation-case" data-i18n="consultationCase">Caso autorizzato</label><select id="consultation-case" required></select></div>
+              <fieldset class="channel-field"><legend data-i18n="consultationChannel">Come preferisci essere ricontattato?</legend><label><input type="radio" name="consultation-channel" value="phone" checked><span data-i18n="consultationPhone">Telefono</span></label><label><input type="radio" name="consultation-channel" value="whatsapp"><span data-i18n="consultationWhatsapp">WhatsApp</span></label></fieldset>
+              <button id="consultation-submit" class="button primary" type="submit" data-i18n="consultationSubmit">Registra richiesta</button>
+            </form>
+            <p id="consultation-result" class="notice success" role="status" aria-live="polite" tabindex="-1" hidden></p>
+            <p class="field-note" data-i18n="consultationSafety">La richiesta sarà gestita successivamente. Non mostra numeri privati, non effettua chiamate, non invia messaggi e non genera addebiti. Non è prevista una durata massima della chiamata.</p>
+            <ul id="consultation-requests" class="consultation-requests"></ul>
+          </div>
+        </section>
         <div class="status-actions"><a id="account-workspace" class="button primary" href="/app/" data-i18n="openWorkspace" hidden>Apri lo spazio di lavoro</a><button id="account-refresh" class="button secondary" type="button" data-i18n="refresh">Aggiorna stato</button></div>
       </div>
       <a class="back-link" href="/" data-i18n="backHome">← Torna al sito</a>

@@ -52,6 +52,20 @@
       errorGeneric: 'The operation failed. Try again; no analysis has been started.', errorNetwork: 'The service could not be reached. Check your connection and try again.', errorCredentials: 'Invalid email or password.', errorCsrf: 'Your session has expired. Reload the page and try again.', errorRate: 'Too many attempts. Wait before trying again.', errorDuplicate: 'An account cannot be created with these details. If you already have an account, sign in.', errorInvalid: 'Check the details and password requirements.', errorClosed: 'New registrations are closed.', errorSession: 'Your session is no longer valid. Sign in again.', errorConfiguration: 'Access is not configured on this installation yet.'
     }
   };
+  const consultationTranslations = {
+    it: { consultationTitle:'Contatto con uno specialista', consultationDraft:'Disponibilità sperimentale separata dalla fatturazione. Nomi, prezzi e regole commerciali non sono definitivi.', consultationLoad:'Mostra disponibilità', consultationIncluded:'Incluse', consultationReserved:'Prenotate', consultationUsed:'Utilizzate', consultationBalance:'Disponibili', consultationRenewal:'Prossimo rinnovo:', consultationCase:'Caso autorizzato', consultationChannel:'Come preferisci essere ricontattato?', consultationPhone:'Telefono', consultationWhatsapp:'WhatsApp', consultationSubmit:'Registra richiesta', consultationSafety:'La richiesta sarà gestita successivamente. Non mostra numeri privati, non effettua chiamate, non invia messaggi e non genera addebiti. Non è prevista una durata massima della chiamata.', consultationRecorded:'Richiesta registrata. Nessun messaggio o chiamata è stato inviato.', consultationNoCases:'Prima salva un’analisi nel tuo archivio.', consultationUnavailable:'Nessuna richiesta inclusa disponibile in questo periodo.', consultationCancel:'Annulla richiesta', consultationCancelled:'Richiesta annullata. La disponibilità non cambia.' },
+    de: { consultationTitle:'Kontakt mit einer Fachperson', consultationDraft:'Experimentelle Verfügbarkeit, getrennt von der Abrechnung. Namen, Preise und Geschäftsregeln sind nicht endgültig.', consultationLoad:'Verfügbarkeit anzeigen', consultationIncluded:'Enthalten', consultationReserved:'Reserviert', consultationUsed:'Genutzt', consultationBalance:'Verfügbar', consultationRenewal:'Nächste Erneuerung:', consultationCase:'Berechtigter Fall', consultationChannel:'Wie möchten Sie kontaktiert werden?', consultationPhone:'Telefon', consultationWhatsapp:'WhatsApp', consultationSubmit:'Anfrage erfassen', consultationSafety:'Die Anfrage wird später bearbeitet. Sie zeigt keine private Nummer, tätigt keinen Anruf, sendet keine Nachricht und verursacht keine Belastung. Es gibt keine maximale Gesprächsdauer.', consultationRecorded:'Anfrage erfasst. Es wurde keine Nachricht gesendet und kein Anruf getätigt.', consultationNoCases:'Speichern Sie zuerst eine Analyse in Ihrem Archiv.', consultationUnavailable:'In diesem Zeitraum ist keine enthaltene Anfrage verfügbar.', consultationCancel:'Anfrage stornieren', consultationCancelled:'Anfrage storniert. Die Verfügbarkeit ändert sich nicht.' },
+    fr: { consultationTitle:'Contact avec un spécialiste', consultationDraft:'Disponibilité expérimentale distincte de la facturation. Les noms, prix et règles commerciales ne sont pas définitifs.', consultationLoad:'Afficher la disponibilité', consultationIncluded:'Incluses', consultationReserved:'Réservées', consultationUsed:'Utilisées', consultationBalance:'Disponibles', consultationRenewal:'Prochain renouvellement :', consultationCase:'Cas autorisé', consultationChannel:'Comment souhaitez-vous être recontacté ?', consultationPhone:'Téléphone', consultationWhatsapp:'WhatsApp', consultationSubmit:'Enregistrer la demande', consultationSafety:'La demande sera traitée ultérieurement. Elle n’affiche aucun numéro privé, ne passe aucun appel, n’envoie aucun message et ne génère aucun débit. Aucune durée maximale d’appel n’est prévue.', consultationRecorded:'Demande enregistrée. Aucun message ni appel n’a été envoyé.', consultationNoCases:'Enregistrez d’abord une analyse dans vos archives.', consultationUnavailable:'Aucune demande incluse n’est disponible pour cette période.', consultationCancel:'Annuler la demande', consultationCancelled:'Demande annulée. La disponibilité ne change pas.' },
+    en: { consultationTitle:'Contact a specialist', consultationDraft:'Experimental availability, separate from billing. Names, prices and commercial rules are not final.', consultationLoad:'Show availability', consultationIncluded:'Included', consultationReserved:'Reserved', consultationUsed:'Used', consultationBalance:'Available', consultationRenewal:'Next renewal:', consultationCase:'Authorised case', consultationChannel:'How would you like to be contacted?', consultationPhone:'Phone', consultationWhatsapp:'WhatsApp', consultationSubmit:'Record request', consultationSafety:'The request will be handled later. It reveals no private number, makes no call, sends no message and creates no charge. There is no maximum call duration.', consultationRecorded:'Request recorded. No message or call was sent.', consultationNoCases:'First save an analysis in your archive.', consultationUnavailable:'No included request is available in this period.', consultationCancel:'Cancel request', consultationCancelled:'Request cancelled. Availability does not change.' }
+  };
+  Object.keys(dictionaries).forEach(language => Object.assign(dictionaries[language], consultationTranslations[language]));
+  const consultationDetailTranslations = {
+    it:{consultationAvailableState:'Richiesta disponibile in questo periodo.',consultationExhaustedState:'Disponibilità esaurita per questo periodo.',consultationIdempotency:'La richiesta ripetuta non corrisponde a quella già registrata. Ricarica la disponibilità.',consultationChannelPhone:'Canale: telefono',consultationChannelWhatsapp:'Canale: WhatsApp',consultationStatusReserved:'stato: prenotata',consultationStatusUsed:'stato: utilizzata',consultationStatusCancelled:'stato: annullata',consultationAuthorizedCase:'Caso autorizzato'},
+    de:{consultationAvailableState:'In diesem Zeitraum ist eine Anfrage verfügbar.',consultationExhaustedState:'Die Verfügbarkeit für diesen Zeitraum ist ausgeschöpft.',consultationIdempotency:'Die wiederholte Anfrage stimmt nicht mit der bereits erfassten überein. Laden Sie die Verfügbarkeit neu.',consultationChannelPhone:'Kanal: Telefon',consultationChannelWhatsapp:'Kanal: WhatsApp',consultationStatusReserved:'Status: reserviert',consultationStatusUsed:'Status: genutzt',consultationStatusCancelled:'Status: storniert',consultationAuthorizedCase:'Berechtigter Fall'},
+    fr:{consultationAvailableState:'Une demande est disponible pour cette période.',consultationExhaustedState:'La disponibilité est épuisée pour cette période.',consultationIdempotency:'La demande répétée ne correspond pas à celle déjà enregistrée. Rechargez la disponibilité.',consultationChannelPhone:'Canal : téléphone',consultationChannelWhatsapp:'Canal : WhatsApp',consultationStatusReserved:'statut : réservée',consultationStatusUsed:'statut : utilisée',consultationStatusCancelled:'statut : annulée',consultationAuthorizedCase:'Cas autorisé'},
+    en:{consultationAvailableState:'A request is available in this period.',consultationExhaustedState:'Availability is exhausted for this period.',consultationIdempotency:'The repeated request does not match the one already recorded. Reload availability.',consultationChannelPhone:'Channel: phone',consultationChannelWhatsapp:'Channel: WhatsApp',consultationStatusReserved:'status: reserved',consultationStatusUsed:'status: used',consultationStatusCancelled:'status: cancelled',consultationAuthorizedCase:'Authorised case'}
+  };
+  Object.keys(dictionaries).forEach(language => Object.assign(dictionaries[language], consultationDetailTranslations[language]));
   const locales = Object.keys(dictionaries);
   const storageKey = 'slps.account.locale';
   function eligible(account) {
@@ -62,6 +76,9 @@
     if (['invalid_credentials', 'invalid_login'].includes(code)) return 'errorCredentials';
     if (code === 'authentication_required' || status === 401) return 'errorSession';
     if (status === 429) return 'errorRate';
+    if (code === 'consultation_unavailable') return 'consultationUnavailable';
+    if (code === 'idempotency_mismatch') return 'consultationIdempotency';
+    if (['invalid_consultation', 'case_not_found'].includes(code)) return 'errorInvalid';
     if (['registration_closed', 'registration_disabled', 'accounts_disabled'].includes(code)) return 'errorClosed';
     if (['registration_unavailable', 'account_exists', 'company_exists', 'duplicate_email', 'duplicate_company', 'registration_conflict'].includes(code) || status === 409) return 'errorDuplicate';
     if (code === 'invalid_registration' || status === 400 || status === 422) return 'errorInvalid';
@@ -73,7 +90,7 @@
     let saved = null;
     try { saved = window.localStorage.getItem(storageKey); } catch (_) { /* Storage is optional. */ }
     const browser = String(window.navigator && window.navigator.language || '').slice(0, 2);
-    const state = { language: locales.includes(saved) ? saved : locales.includes(browser) ? browser : 'it', explicitLanguage: locales.includes(saved), view: window.location.pathname.replace(/\/$/, '') === '/register' ? 'register' : 'login', csrf: '', authenticated: false, authConfigured: false, account: null, authMode: null, registrationOpen: false, busy: false, loading: true, notice: null };
+    const state = { language: locales.includes(saved) ? saved : locales.includes(browser) ? browser : 'it', explicitLanguage: locales.includes(saved), view: window.location.pathname.replace(/\/$/, '') === '/register' ? 'register' : 'login', csrf: '', authenticated: false, authConfigured: false, account: null, authMode: null, registrationOpen: false, busy: false, loading: true, notice: null, consultation: null, consultationCases: [], consultationKey: null };
     const t = key => dictionaries[state.language][key] || dictionaries.it[key] || key;
     function setNotice(key, kind = '', focus = false) {
       state.notice = key ? { key, kind } : null;
@@ -124,6 +141,9 @@
       $('account-status').setAttribute('aria-busy', String(state.busy));
       ['register-submit', 'login-submit', 'account-refresh', 'account-logout'].forEach(id => { $(id).disabled = state.busy || state.loading || !state.authConfigured; });
       $('account-refresh').disabled = state.busy || state.loading;
+      $('consultation-panel').setAttribute('aria-busy', String(state.busy));
+      $('consultation-load').disabled = state.busy || state.loading || !state.authenticated;
+      $('consultation-submit').disabled = state.busy || !state.consultation || state.consultation.balance < 1 || state.consultationCases.length === 0;
       $('register-submit').textContent = t(state.busy && registering ? 'registering' : 'registerSubmit');
       $('login-submit').textContent = t(state.busy && !registering && !state.authenticated ? 'loggingIn' : 'loginSubmit');
       $('account-refresh').textContent = t(state.busy && state.authenticated ? 'refreshing' : 'refresh');
@@ -138,9 +158,11 @@
         $('verification-pending-note').hidden = ready;
         $('delivery-note').hidden = account.email_verified === true;
         $('account-workspace').hidden = !ready;
+        $('consultation-panel').hidden = !ready;
       } else {
         $('account-company-name').textContent = ''; $('account-email').textContent = '';
         $('account-workspace').hidden = true;
+        $('consultation-panel').hidden = true;
       }
     }
     function applySession(data) {
@@ -166,7 +188,60 @@
       }
       return data;
     }
-    const post = (url, payload) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify(payload) });
+    const post = (url, payload, extraHeaders = {}) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf, ...extraHeaders }, body: JSON.stringify(payload) });
+    function consultationKey(caseId, channel) {
+      if (state.consultationKey && state.consultationKey.caseId === caseId && state.consultationKey.channel === channel) return state.consultationKey.value;
+      const random = window.crypto && window.crypto.getRandomValues ? Array.from(window.crypto.getRandomValues(new Uint32Array(2))).join('-') : String(Date.now()) + '-' + String(Math.random()).slice(2);
+      state.consultationKey = { caseId, channel, value: 'consult-' + random };
+      return state.consultationKey.value;
+    }
+    function renderConsultation(data) {
+      const ledger = data.consultation || data;
+      state.consultation = ledger; state.consultationCases = Array.isArray(data.cases) ? data.cases : state.consultationCases;
+      $('consultation-content').hidden = false;
+      ['included','reserved','used','balance'].forEach(key => { $('consultation-' + key).textContent = String(Number.isInteger(ledger[key]) ? ledger[key] : 0); });
+      $('consultation-availability').textContent = t(ledger.balance > 0 ? 'consultationAvailableState' : 'consultationExhaustedState');
+      const date = new Date(ledger.next_reset); $('consultation-next-reset').textContent = Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(state.language, { dateStyle:'medium' }).format(date);
+      const select = $('consultation-case');
+      if (document.createElement && select.replaceChildren) {
+        const options = state.consultationCases.map(item => { const option = document.createElement('option'); option.value = item.id; option.textContent = item.summary || item.id; return option; });
+        select.replaceChildren(...options);
+      }
+      select.disabled = state.consultationCases.length === 0;
+      $('consultation-submit').disabled = state.busy || ledger.balance < 1 || state.consultationCases.length === 0;
+      if (state.consultationCases.length === 0) { $('consultation-result').textContent = t('consultationNoCases'); $('consultation-result').hidden = false; }
+      const list = $('consultation-requests');
+      if (document.createElement && list.replaceChildren) {
+        const items = (ledger.requests || []).map(item => {
+          const li = document.createElement('li');
+          const found = state.consultationCases.find(candidate => candidate.id === item.case_id);
+          const caseLabel = found && found.summary ? found.summary : t('consultationAuthorizedCase');
+          const channelLabel = t(item.channel === 'whatsapp' ? 'consultationChannelWhatsapp' : 'consultationChannelPhone');
+          const statusKey = item.status === 'used' ? 'consultationStatusUsed' : item.status === 'cancelled' ? 'consultationStatusCancelled' : 'consultationStatusReserved';
+          li.textContent = channelLabel + ' · ' + t(statusKey) + ' · ' + caseLabel;
+          if (item.status === 'reserved') { const button = document.createElement('button'); button.type='button'; button.className='text-button'; button.textContent=t('consultationCancel'); button.addEventListener('click', () => cancelConsultation(item.id)); li.appendChild(button); }
+          return li;
+        });
+        list.replaceChildren(...items);
+      }
+    }
+    async function loadConsultations() {
+      return run(async () => { const data = await api('/api/consultations'); renderConsultation(data); });
+    }
+    async function requestConsultation(event) {
+      if (event) event.preventDefault();
+      const caseId = $('consultation-case').value;
+      const selected = document.querySelector ? document.querySelector('input[name="consultation-channel"]:checked') : null;
+      const channel = selected ? selected.value : 'phone';
+      return run(async () => {
+        const data = await post('/api/consultations', { case_id: caseId, channel }, { 'Idempotency-Key': consultationKey(caseId, channel) });
+        state.consultationKey = null; renderConsultation(data.consultation);
+        $('consultation-result').textContent = t('consultationRecorded'); $('consultation-result').hidden = false; $('consultation-result').focus();
+      });
+    }
+    async function cancelConsultation(requestId) {
+      return run(async () => { const data = await post('/api/consultations/' + encodeURIComponent(requestId) + '/cancel', {}); renderConsultation(data.consultation); $('consultation-result').textContent=t('consultationCancelled'); $('consultation-result').hidden=false; });
+    }
     function showView(view, focus = true) {
       if (state.busy) return;
       state.view = view === 'register' && state.registrationOpen ? 'register' : 'login';
@@ -220,9 +295,11 @@
       $('account-login-form').addEventListener('submit', login);
       $('account-refresh').addEventListener('click', () => refresh(true));
       $('account-logout').addEventListener('click', logout);
+      $('consultation-load').addEventListener('click', loadConsultations);
+      $('consultation-form').addEventListener('submit', requestConsultation);
     }
     async function start() { bind(); translate(); await refresh(); }
-    return { start, refresh, register, login, logout, applySession, setLanguage, showView, state };
+    return { start, refresh, register, login, logout, loadConsultations, requestConsultation, cancelConsultation, applySession, setLanguage, showView, state };
   }
   return { dictionaries, locales, storageKey, eligible, errorKey, createController };
 });

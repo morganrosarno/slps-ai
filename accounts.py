@@ -4,6 +4,7 @@ This module sends no mail and calls no external service. Token issuance is an
 operator/delivery-adapter primitive, never a token-disclosing HTTP endpoint.
 """
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
 import re
@@ -58,6 +59,24 @@ class AccountConflict(ValueError):
     pass
 
 
+class ConsultationConflict(ValueError):
+    """A consultation entitlement cannot be reserved or transitioned."""
+
+
+def _future_period(start, months):
+    """Return a UTC timestamp exactly ``months`` calendar months after start."""
+    value = datetime.fromtimestamp(start, timezone.utc)
+    month = value.month - 1 + months
+    year, month = value.year + month // 12, month % 12 + 1
+    days = (31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+            31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    return value.replace(year=year, month=month, day=min(value.day, days[month - 1])).timestamp()
+
+
+def _utc(timestamp):
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class AccountStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -87,7 +106,49 @@ class AccountStore:
                     used INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(user_id) REFERENCES account_users(id)
                 );
+                CREATE TABLE IF NOT EXISTS consultation_entitlements (
+                    company_id TEXT PRIMARY KEY,
+                    included INTEGER NOT NULL,
+                    period_months INTEGER NOT NULL,
+                    period_started REAL NOT NULL,
+                    next_reset REAL NOT NULL,
+                    updated REAL NOT NULL,
+                    FOREIGN KEY(company_id) REFERENCES account_companies(id)
+                );
+                CREATE TABLE IF NOT EXISTS consultation_policies (
+                    company_id TEXT PRIMARY KEY,
+                    included INTEGER NOT NULL CHECK(included IN (0,1)),
+                    period_months INTEGER NOT NULL CHECK(period_months IN (1,12)),
+                    updated REAL NOT NULL,
+                    FOREIGN KEY(company_id) REFERENCES account_companies(id)
+                );
+                CREATE TABLE IF NOT EXISTS consultation_requests (
+                    id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    channel TEXT NOT NULL CHECK(channel IN ('phone','whatsapp')),
+                    status TEXT NOT NULL CHECK(status IN ('reserved','used','cancelled')),
+                    period_started REAL NOT NULL,
+                    created REAL NOT NULL,
+                    updated REAL NOT NULL,
+                    used_at REAL,
+                    cancelled_at REAL,
+                    FOREIGN KEY(company_id) REFERENCES account_companies(id),
+                    FOREIGN KEY(user_id) REFERENCES account_users(id)
+                );
+                CREATE INDEX IF NOT EXISTS consultation_requests_period
+                    ON consultation_requests(company_id, period_started, status);
+                CREATE INDEX IF NOT EXISTS consultation_requests_user
+                    ON consultation_requests(company_id, user_id, created);
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(consultation_requests)")}
+            if "idempotency_key" not in columns:
+                db.execute("ALTER TABLE consultation_requests ADD COLUMN idempotency_key TEXT")
+                db.execute("UPDATE consultation_requests SET idempotency_key='legacy:' || id WHERE idempotency_key IS NULL")
+            db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS consultation_requests_idempotency
+                          ON consultation_requests(company_id,user_id,idempotency_key)""")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -232,3 +293,195 @@ class AccountStore:
                        VALUES (?,?,?,?,?,?,?,?)""",
                        (user_id, company_id, email, generate_password_hash(password), role, locale, int(bool(approved)), time.time()))
         return self.get_user(user_id)
+
+    @staticmethod
+    def _consultation_policy(included, period_months):
+        if isinstance(included, bool) or included not in {0, 1}:
+            raise ValueError("consultation_included")
+        if isinstance(period_months, bool) or period_months not in {1, 12}:
+            raise ValueError("consultation_period")
+        return included, period_months
+
+    def assign_consultation_policy(self, company_id, *, included, period_months, now=None):
+        """Trusted provisioning only; intentionally has no public HTTP endpoint."""
+        included, period_months = self._consultation_policy(included, period_months)
+        now = time.time() if now is None else float(now)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM account_companies WHERE id=?", (company_id,)).fetchone():
+                raise ValueError("company")
+            db.execute(
+                """INSERT INTO consultation_policies(company_id,included,period_months,updated)
+                   VALUES (?,?,?,?) ON CONFLICT(company_id) DO UPDATE SET
+                   included=excluded.included,period_months=excluded.period_months,
+                   updated=excluded.updated""",
+                (company_id, included, period_months, now),
+            )
+
+    @staticmethod
+    def _stored_consultation_policy(db, company_id):
+        row = db.execute(
+            "SELECT included,period_months FROM consultation_policies WHERE company_id=?",
+            (company_id,),
+        ).fetchone()
+        return (row["included"], row["period_months"]) if row else (0, 12)
+
+    def _consultation_user(self, db, company_id, user_id):
+        return db.execute(
+            """SELECT 1 FROM account_users u JOIN account_companies c ON c.id=u.company_id
+               WHERE u.id=? AND u.company_id=? AND u.active=1 AND u.email_verified=1
+                 AND u.membership_verified=1 AND c.verified=1""",
+            (user_id, company_id),
+        ).fetchone()
+
+    def _ensure_consultation_period(self, db, company_id, now):
+        company = db.execute("SELECT 1 FROM account_companies WHERE id=?", (company_id,)).fetchone()
+        if not company:
+            raise ValueError("company")
+        included, period_months = self._stored_consultation_policy(db, company_id)
+        row = db.execute(
+            "SELECT * FROM consultation_entitlements WHERE company_id=?", (company_id,)
+        ).fetchone()
+        if row is None or now >= row["next_reset"]:
+            started, next_reset = now, _future_period(now, period_months)
+            db.execute(
+                """INSERT INTO consultation_entitlements
+                   (company_id,included,period_months,period_started,next_reset,updated)
+                   VALUES (?,?,?,?,?,?)
+                   ON CONFLICT(company_id) DO UPDATE SET included=excluded.included,
+                   period_months=excluded.period_months,period_started=excluded.period_started,
+                   next_reset=excluded.next_reset,updated=excluded.updated""",
+                (company_id, included, period_months, started, next_reset, now),
+            )
+        elif row["included"] != included or row["period_months"] != period_months:
+            # Configuration is a draft hypothesis. Preserve the current period and
+            # past requests while updating only its allowance/cadence metadata.
+            next_reset = _future_period(row["period_started"], period_months)
+            if now >= next_reset:
+                started, next_reset = now, _future_period(now, period_months)
+            else:
+                started = row["period_started"]
+            db.execute(
+                """UPDATE consultation_entitlements SET included=?,period_months=?,
+                   period_started=?,next_reset=?,updated=? WHERE company_id=?""",
+                (included, period_months, started, next_reset, now, company_id),
+            )
+        return db.execute(
+            "SELECT * FROM consultation_entitlements WHERE company_id=?", (company_id,)
+        ).fetchone()
+
+    @staticmethod
+    def _consultation_payload(db, entitlement, user_id):
+        counts = {"reserved": 0, "used": 0, "cancelled": 0}
+        for row in db.execute(
+            """SELECT status,COUNT(*) AS amount FROM consultation_requests
+               WHERE company_id=? AND period_started=? AND status IN ('reserved','used','cancelled')
+               GROUP BY status""",
+            (entitlement["company_id"], entitlement["period_started"]),
+        ):
+            counts[row["status"]] = row["amount"]
+        requests = [dict(row) for row in db.execute(
+            """SELECT id,case_id,user_id,channel,status,period_started,created,updated,used_at,cancelled_at
+               FROM consultation_requests WHERE company_id=? AND user_id=?
+               ORDER BY created DESC,id DESC LIMIT 50""",
+            (entitlement["company_id"], user_id),
+        ).fetchall()]
+        included = entitlement["included"]
+        return {
+            "included": included,
+            "reserved": counts["reserved"],
+            "used": counts["used"],
+            "cancelled": counts["cancelled"],
+            # Draft policy: cancellation records the outcome but never silently
+            # restores an allowance. Carryover/refund rules remain undecided.
+            "balance": max(0, included - counts["reserved"] - counts["used"] - counts["cancelled"]),
+            "next_reset": _utc(entitlement["next_reset"]),
+            "period_started": _utc(entitlement["period_started"]),
+            "period_months": entitlement["period_months"],
+            "requests": requests,
+        }
+
+    def consultation_status(self, company_id, user_id, *, now=None):
+        now = time.time() if now is None else float(now)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self._consultation_user(db, company_id, user_id):
+                raise ValueError("user")
+            entitlement = self._ensure_consultation_period(db, company_id, now)
+            return self._consultation_payload(db, entitlement, user_id)
+
+    def reserve_consultation(self, company_id, user_id, case_id, channel, *, idempotency_key,
+                             now=None):
+        """Atomically reserve one company allowance; this performs no contact."""
+        now = time.time() if now is None else float(now)
+        case_id = clean_text(case_id, "case_id", 64)
+        idempotency_key = clean_text(idempotency_key, "idempotency_key", 128)
+        if channel not in {"phone", "whatsapp"}:
+            raise ValueError("channel")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self._consultation_user(db, company_id, user_id):
+                raise ValueError("user")
+            entitlement = self._ensure_consultation_period(db, company_id, now)
+            previous = db.execute(
+                """SELECT id,case_id,channel FROM consultation_requests
+                   WHERE company_id=? AND user_id=? AND idempotency_key=?""",
+                (company_id, user_id, idempotency_key),
+            ).fetchone()
+            if previous:
+                if previous["case_id"] != case_id or previous["channel"] != channel:
+                    raise ConsultationConflict("idempotency_mismatch")
+                payload = self._consultation_payload(db, entitlement, user_id)
+                payload["request_id"] = previous["id"]
+                payload["idempotent_replay"] = True
+                return payload
+            state = self._consultation_payload(db, entitlement, user_id)
+            if state["balance"] < 1:
+                raise ConsultationConflict("consultation_unavailable")
+            request_id = secrets.token_hex(16)
+            db.execute(
+                """INSERT INTO consultation_requests
+                   (id,company_id,user_id,case_id,idempotency_key,channel,status,period_started,created,updated)
+                   VALUES (?,?,?,?,?,?,'reserved',?,?,?)""",
+                (request_id, company_id, user_id, case_id, idempotency_key, channel,
+                 entitlement["period_started"], now, now),
+            )
+            entitlement = db.execute(
+                "SELECT * FROM consultation_entitlements WHERE company_id=?", (company_id,)
+            ).fetchone()
+            payload = self._consultation_payload(db, entitlement, user_id)
+            payload["request_id"] = request_id
+            return payload
+
+    def _transition_consultation(self, request_id, company_id, user_id, target, now=None):
+        if target not in {"used", "cancelled"}:
+            raise ValueError("status")
+        now = time.time() if now is None else float(now)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self._consultation_user(db, company_id, user_id):
+                raise ValueError("user")
+            row = db.execute(
+                """SELECT * FROM consultation_requests
+                   WHERE id=? AND company_id=? AND user_id=?""",
+                (request_id, company_id, user_id),
+            ).fetchone()
+            if not row:
+                raise ConsultationConflict("consultation_not_found")
+            if row["status"] == target:
+                return True
+            if row["status"] != "reserved":
+                raise ConsultationConflict("consultation_already_final")
+            field = "used_at" if target == "used" else "cancelled_at"
+            db.execute(
+                f"UPDATE consultation_requests SET status=?,updated=?,{field}=? WHERE id=?",
+                (target, now, now, request_id),
+            )
+            return True
+
+    def mark_consultation_used(self, request_id, company_id, user_id, *, now=None):
+        """Trusted fulfilment transition; intentionally not a public HTTP action."""
+        return self._transition_consultation(request_id, company_id, user_id, "used", now)
+
+    def cancel_consultation(self, request_id, company_id, user_id, *, now=None):
+        return self._transition_consultation(request_id, company_id, user_id, "cancelled", now)

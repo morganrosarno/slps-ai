@@ -20,7 +20,7 @@ from flask import Flask, Request, jsonify, redirect, render_template, request, s
 from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
-from accounts import AccountConflict, AccountStore, normalize_email
+from accounts import AccountConflict, AccountStore, ConsultationConflict, normalize_email
 from media import MediaError, inspect_video, media_tools_available
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -1115,6 +1115,70 @@ def create_app(test_config=None):
             cases=case_store.list(session["tenant_id"], session["owner_id"]),
             storage=case_store.storage_status(session["tenant_id"]),
         )
+
+    def consultation_state(user):
+        return accounts.consultation_status(user["company_id"], user["id"])
+
+    @app.get("/api/consultations")
+    @protect(require_csrf=False)
+    def consultations():
+        if not account_mode():
+            return error("consultations_unavailable", "Funzione non disponibile in questo accesso.", 404)
+        user = current_account()
+        state = consultation_state(user)
+        cases = [
+            {"id": item["id"], "created_at": item["created_at"], "summary": item.get("summary", "")}
+            for item in case_store.list(session["tenant_id"], session["owner_id"])
+            if not item.get("deletion_pending")
+        ]
+        return jsonify(consultation=state, cases=cases, hypothesis=True,
+                       message="Disponibilità sperimentale separata dalla fatturazione.")
+
+    @app.post("/api/consultations")
+    @protect
+    def reserve_consultation():
+        if not account_mode():
+            return error("consultations_unavailable", "Funzione non disponibile in questo accesso.", 404)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or (request.content_length and request.content_length > 2048):
+            return error("invalid_request", "Richiesta non valida.", 400)
+        case_id, channel = data.get("case_id"), data.get("channel")
+        key = request.headers.get("Idempotency-Key", "")
+        if (not isinstance(case_id, str) or len(case_id) > 64 or
+                channel not in {"phone", "whatsapp"} or not 12 <= len(key) <= 128):
+            return error("invalid_consultation", "Scegli un caso e un canale validi.", 400)
+        # Owner-private case authorization is checked before consuming allowance.
+        if not case_store.get(case_id, session["tenant_id"], session["owner_id"]):
+            return error("case_not_found", "Caso non disponibile.", 404)
+        user = current_account()
+        try:
+            state = accounts.reserve_consultation(
+                user["company_id"], user["id"], case_id, channel,
+                idempotency_key=key,
+            )
+        except (ConsultationConflict, ValueError) as exc:
+            code = str(exc)
+            if code == "idempotency_mismatch":
+                return error("idempotency_mismatch", "Richiesta duplicata non coerente.", 409)
+            return error("consultation_unavailable", "Nessuna richiesta inclusa disponibile in questo periodo.", 409)
+        replay = state.pop("idempotent_replay", False)
+        return jsonify(
+            recorded=True, contacted=False, charged=False, consultation=state,
+            message="Richiesta registrata. Nessun messaggio o chiamata è stato inviato.",
+        ), 200 if replay else 201
+
+    @app.post("/api/consultations/<request_id>/cancel")
+    @protect
+    def cancel_consultation(request_id):
+        if not account_mode() or len(request_id) > 64:
+            return error("consultation_not_found", "Richiesta non disponibile.", 404)
+        user = current_account()
+        try:
+            accounts.cancel_consultation(request_id, user["company_id"], user["id"])
+        except (ConsultationConflict, ValueError):
+            return error("consultation_not_found", "Richiesta non disponibile o già conclusa.", 404)
+        return jsonify(cancelled=True, credited=False, consultation=consultation_state(user),
+                       message="Richiesta annullata. La disponibilità non cambia: la politica è ancora da definire.")
 
     @app.get("/api/cases/<case_id>")
     @protect

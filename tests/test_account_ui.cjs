@@ -7,15 +7,16 @@ const ui = require('../static/account.js');
 const html = fs.readFileSync(path.join(__dirname, '../templates/account.html'), 'utf8');
 
 function element(id, i18n = null) {
-  return { id, hidden: false, disabled: false, value: '', textContent: '', className: '', dataset: {}, attributes: i18n ? { 'data-i18n': i18n } : {}, listeners: {}, focused: false,
+  return { id, hidden: false, disabled: false, value: '', textContent: '', className: '', dataset: {}, attributes: i18n ? { 'data-i18n': i18n } : {}, listeners: {}, focused: false, children: [],
     setAttribute(key, value) { this.attributes[key] = value; }, getAttribute(key) { return this.attributes[key]; },
-    addEventListener(type, fn) { this.listeners[type] = fn; }, focus() { this.focused = true; }, scrollIntoView() {} };
+    addEventListener(type, fn) { this.listeners[type] = fn; }, focus() { this.focused = true; }, scrollIntoView() {},
+    appendChild(child) { this.children.push(child); }, replaceChildren(...children) { this.children = children; if (this.id === 'consultation-case') this.value = children[0] ? children[0].value : ''; } };
 }
 function harness(responses = [], route = '/account') {
   const nodes = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(match => [match[1], element(match[1])]));
   const translated = [...html.matchAll(/data-i18n="([^"]+)"/g)].map((match, index) => element('translated-' + index, match[1]));
   const saved = new Map(), requests = [];
-  const document = { title: '', documentElement: { lang: 'it' }, getElementById: id => { assert.ok(nodes[id], 'Known element ' + id); return nodes[id]; }, querySelectorAll: () => translated };
+  const document = { title: '', documentElement: { lang: 'it' }, getElementById: id => { assert.ok(nodes[id], 'Known element ' + id); return nodes[id]; }, querySelectorAll: () => translated, querySelector: () => null, createElement: tag => element(tag) };
   const window = { location: { pathname: route }, navigator: { language: 'it-CH' }, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) } };
   async function fetcher(url, options) {
     requests.push({ url, options });
@@ -196,4 +197,47 @@ test('New screen includes accessible controls and responsive/reduced-motion rule
   assert.doesNotMatch(html, /onclick=|style=/);
   const css = fs.readFileSync(path.join(__dirname, '../static/account.css'), 'utf8');
   assert.match(css, /@media\(max-width:740px\)/); assert.match(css, /prefers-reduced-motion/);
+});
+
+test('Verified user can inspect ledger and record one case-bound phone request without contact side effects', async () => {
+  const consultation = { included: 1, reserved: 0, used: 0, cancelled: 0, balance: 1, next_reset: '2027-10-26T10:00:00Z', period_months: 12, requests: [] };
+  const recorded = { ...consultation, reserved: 1, balance: 0, request_id: 'request-1', requests: [{ id:'request-1', case_id:'case-1', user_id:'user-1', channel:'phone', status:'reserved' }] };
+  const h = harness([{ data: verified }, { data: { consultation, cases: [{ id:'case-1', summary:'Analisi officina' }], hypothesis:true } }, { status:201, data:{ recorded:true, contacted:false, charged:false, consultation:recorded } }]);
+  await h.controller.start();
+  assert.equal(h.nodes['consultation-panel'].hidden, false);
+  await h.controller.loadConsultations();
+  assert.equal(h.nodes['consultation-content'].hidden, false);
+  assert.equal(h.nodes['consultation-balance'].textContent, '1');
+  assert.equal(h.nodes['consultation-availability'].textContent, ui.dictionaries.it.consultationAvailableState);
+  assert.equal(h.nodes['consultation-case'].value, 'case-1');
+  await h.controller.requestConsultation({ preventDefault() {} });
+  const request = h.requests[2];
+  assert.equal(request.url, '/api/consultations');
+  assert.equal(request.options.headers['X-CSRF-Token'], 'csrf-after');
+  assert.ok(request.options.headers['Idempotency-Key'].length >= 12);
+  assert.deepEqual(JSON.parse(request.options.body), { case_id:'case-1', channel:'phone' });
+  assert.equal(h.nodes['consultation-result'].textContent, ui.dictionaries.it.consultationRecorded);
+  assert.equal(h.nodes['consultation-result'].focused, true);
+  assert.equal(h.nodes['consultation-balance'].textContent, '0');
+  assert.equal(h.nodes['consultation-availability'].textContent, ui.dictionaries.it.consultationExhaustedState);
+  assert.equal(h.nodes['consultation-requests'].children[0].textContent.startsWith('Canale: telefono · stato: prenotata · Analisi officina'), true);
+  assert.equal(h.nodes['consultation-requests'].children[0].textContent.includes('case-1'), false);
+});
+
+test('Consultation conflicts have distinct messages before generic HTTP 409 mapping', () => {
+  assert.equal(ui.errorKey('consultation_unavailable', 409), 'consultationUnavailable');
+  assert.equal(ui.errorKey('idempotency_mismatch', 409), 'consultationIdempotency');
+  assert.equal(ui.errorKey('registration_unavailable', 409), 'errorDuplicate');
+  for (const language of ui.locales) {
+    assert.notEqual(ui.dictionaries[language].consultationUnavailable, ui.dictionaries[language].errorDuplicate);
+    assert.notEqual(ui.dictionaries[language].consultationIdempotency, ui.dictionaries[language].errorDuplicate);
+  }
+});
+
+test('Consultation interface contains no private contact link, price, duration cap or provider call', () => {
+  const source = html + fs.readFileSync(path.join(__dirname, '../static/account.js'), 'utf8');
+  assert.doesNotMatch(source, /tel:|wa\.me|phone_number|stripe|paypal/i);
+  assert.doesNotMatch(source, /\b(?:15|99|199)\s*(?:CHF|franchi)\b/i);
+  assert.match(source, /Nessun messaggio o chiamata è stato inviato/);
+  assert.match(source, /non è prevista una durata massima/i);
 });

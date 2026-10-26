@@ -2,11 +2,12 @@ import hashlib
 import io
 from pathlib import Path
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
 import pytest
 
-from accounts import AccountConflict, AccountStore
+from accounts import AccountConflict, AccountStore, ConsultationConflict
 import server
 
 PASSWORD = "a-long-local-test-passphrase"
@@ -50,6 +51,12 @@ def provision(app, email="owner@example.test", company="Synthetic Company", iden
 
 def login(client, email="owner@example.test", password=PASSWORD):
     return post(client, "/api/login", {"email": email, "password": password})
+
+
+def enable_consultation(app, user, months=12):
+    app.extensions["account_store"].assign_consultation_policy(
+        user["company_id"], included=1, period_months=months
+    )
 
 
 def analyze(client, token):
@@ -247,3 +254,128 @@ def test_account_cookie_not_accepted_after_switch_to_pilot(app):
     app.config.update(AUTH_MODE="pilot", PILOT_PASSWORD="a-separate-pilot-password")
     assert not client.get("/api/session").json["authenticated"]
     assert client.get("/api/cases", headers={"X-CSRF-Token": state["csrf"]}).status_code == 401
+
+
+def test_consultation_ledger_atomic_idempotent_and_persistent(app):
+    store = app.extensions["account_store"]; owner = provision(app)
+    enable_consultation(app, owner, 12)
+    member = store.add_member(owner["company_id"], email="member@example.test", password=PASSWORD,
+                              role="Employee", approved=True)
+    store.consume_token(store.issue_token(member["id"], "email"), "email")
+    member = store.get_user(member["id"])
+    def reserve(user, key):
+        try:
+            return store.reserve_consultation(owner["company_id"], user["id"], "case-atomic", "phone",
+                                              idempotency_key=key)
+        except ConsultationConflict as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda pair: reserve(*pair), [(owner, "atomic-owner-key"), (member, "atomic-member-key")]))
+    successes = [value for value in results if isinstance(value, dict)]
+    assert len(successes) == 1
+    assert results.count("consultation_unavailable") == 1
+    winner = owner if isinstance(results[0], dict) else member
+    key = "atomic-owner-key" if winner is owner else "atomic-member-key"
+    replay = reserve(winner, key)
+    assert replay["request_id"] == successes[0]["request_id"] and replay["idempotent_replay"]
+    assert replay["reserved"] == 1 and replay["used"] == 0 and replay["balance"] == 0
+    # A new store instance sees the same company ledger: logout/process restart does not reset it.
+    reopened = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    status = reopened.consultation_status(owner["company_id"], winner["id"])
+    assert status["reserved"] == 1 and status["balance"] == 0
+
+
+def test_consultation_policy_is_per_company_persistent_and_disabled_by_default(app):
+    store = app.extensions["account_store"]
+    annual = provision(app)
+    monthly = provision(app, email="monthly@example.test", company="Monthly Co", identifier="CHE444333222")
+    disabled = provision(app, email="disabled@example.test", company="Disabled Co", identifier="CHE111333555")
+    store.assign_consultation_policy(annual["company_id"], included=1, period_months=12)
+    store.assign_consultation_policy(monthly["company_id"], included=1, period_months=1)
+    reopened = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    assert reopened.consultation_status(annual["company_id"], annual["id"])["period_months"] == 12
+    assert reopened.consultation_status(monthly["company_id"], monthly["id"])["period_months"] == 1
+    off = reopened.consultation_status(disabled["company_id"], disabled["id"])
+    assert off["included"] == 0 and off["balance"] == 0
+    with pytest.raises(ConsultationConflict):
+        reopened.reserve_consultation(disabled["company_id"], disabled["id"], "case-off", "phone",
+                                      idempotency_key="disabled-company-key")
+
+
+def test_consultation_used_cancelled_and_calendar_reset_semantics(app):
+    store = app.extensions["account_store"]; user = provision(app)
+    store.assign_consultation_policy(user["company_id"], included=1, period_months=1, now=1_700_000_000)
+    first = store.reserve_consultation(user["company_id"], user["id"], "case-one", "phone",
+                                      idempotency_key="case-one-reserve", now=1_700_000_000)
+    assert store.mark_consultation_used(first["request_id"], user["company_id"], user["id"], now=1_700_000_010)
+    assert store.mark_consultation_used(first["request_id"], user["company_id"], user["id"], now=1_700_000_011)
+    used = store.consultation_status(user["company_id"], user["id"], now=1_700_000_020)
+    assert (used["reserved"], used["used"], used["balance"]) == (0, 1, 0)
+    second = store.reserve_consultation(user["company_id"], user["id"], "case-two", "whatsapp",
+                                       idempotency_key="case-two-reserve", now=1_703_000_000)
+    assert store.cancel_consultation(second["request_id"], user["company_id"], user["id"], now=1_703_000_010)
+    assert store.cancel_consultation(second["request_id"], user["company_id"], user["id"], now=1_703_000_011)
+    current = store.consultation_status(user["company_id"], user["id"], now=1_703_000_020)
+    assert (current["reserved"], current["used"], current["cancelled"], current["balance"]) == (0, 0, 1, 0)
+    assert {item["status"] for item in current["requests"]} == {"used", "cancelled"}
+    reset = store.consultation_status(user["company_id"], user["id"], now=1_706_000_000)
+    assert (reset["reserved"], reset["used"], reset["cancelled"], reset["balance"]) == (0, 0, 0, 1)
+    assert len(reset["requests"]) == 2  # history survives the reset
+
+
+def test_consultation_api_authorization_no_contact_leak_or_side_effect(app, monkeypatch):
+    owner = provision(app); client = app.test_client(); state = login(client).json
+    enable_consultation(app, owner, 12)
+    case_id = analyze(client, state["csrf"]).json["archive"]["case_id"]
+    pending = provision(app, email="pending@example.test", company="Pending Co", identifier="CHE555666777", verified=False)
+    pending_client = app.test_client(); pending_state = login(pending_client, pending["email"]).json
+    assert pending_client.get("/api/consultations").status_code == 403
+
+    calls = []
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_: calls.append("provider"))
+    view = client.get("/api/consultations")
+    assert view.status_code == 200 and view.json["hypothesis"] is True
+    assert view.json["consultation"]["balance"] == 1
+    response = client.post("/api/consultations", json={"case_id": case_id, "channel": "whatsapp"},
+                           headers={"X-CSRF-Token": state["csrf"], "Idempotency-Key": "browser-request-001"})
+    assert response.status_code == 201
+    assert response.json["recorded"] and not response.json["contacted"] and not response.json["charged"]
+    assert response.json["message"] == "Richiesta registrata. Nessun messaggio o chiamata è stato inviato."
+    wire = response.get_data(as_text=True).lower()
+    assert "tel:" not in wire and "wa.me" not in wire and "phone_number" not in wire
+    assert calls == []
+    replay = client.post("/api/consultations", json={"case_id": case_id, "channel": "whatsapp"},
+                         headers={"X-CSRF-Token": state["csrf"], "Idempotency-Key": "browser-request-001"})
+    assert replay.status_code == 200 and replay.json["consultation"]["reserved"] == 1
+    assert client.post("/api/consultations", json={"case_id": case_id, "channel": "phone"},
+                       headers={"Idempotency-Key": "missing-csrf-key"}).status_code == 403
+    assert client.post("/api/consultations/" + response.json["consultation"]["request_id"] + "/used",
+                       headers={"X-CSRF-Token": state["csrf"]}).status_code == 404
+
+
+def test_consultation_case_and_request_isolation(app):
+    store = app.extensions["account_store"]; owner = provision(app)
+    enable_consultation(app, owner, 12)
+    member = store.add_member(owner["company_id"], email="member@example.test", password=PASSWORD,
+                              role="Employee", approved=True)
+    store.consume_token(store.issue_token(member["id"], "email"), "email")
+    a, b = app.test_client(), app.test_client(); sa, sb = login(a).json, login(b, member["email"]).json
+    case_id = analyze(a, sa["csrf"]).json["archive"]["case_id"]
+    denied = b.post("/api/consultations", json={"case_id": case_id, "channel": "phone"},
+                    headers={"X-CSRF-Token": sb["csrf"], "Idempotency-Key": "member-cross-case"})
+    assert denied.status_code == 404
+    assert b.get("/api/consultations").json["consultation"]["balance"] == 1
+    outsider = provision(app, email="outside@example.test", company="Outside Co", identifier="CHE888999000")
+    outside_client = app.test_client(); outside_state = login(outside_client, outsider["email"]).json
+    outside_case = analyze(outside_client, outside_state["csrf"]).json["archive"]["case_id"]
+    cross_company = a.post("/api/consultations", json={"case_id": outside_case, "channel": "phone"},
+                           headers={"X-CSRF-Token": sa["csrf"], "Idempotency-Key": "cross-company-case"})
+    assert cross_company.status_code == 404
+    assert a.get("/api/consultations").json["consultation"]["balance"] == 1
+    own = a.post("/api/consultations", json={"case_id": case_id, "channel": "phone"},
+                 headers={"X-CSRF-Token": sa["csrf"], "Idempotency-Key": "owner-own-case-001"})
+    request_id = own.json["consultation"]["request_id"]
+    assert b.post(f"/api/consultations/{request_id}/cancel", json={},
+                  headers={"X-CSRF-Token": sb["csrf"]}).status_code == 404
+    assert a.get("/api/consultations").json["consultation"]["reserved"] == 1

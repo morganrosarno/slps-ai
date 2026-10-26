@@ -112,9 +112,11 @@ La fondazione della registrazione self-service è descritta in `docs/ACCOUNTS_LO
 dell'azienda non sono collegati. Nessun account in attesa può accedere ad analisi o casi.
 Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
 il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
-espone un token o finge di aver inviato un'email. Il questionario
-azienda e l'eventuale escalation a uno specialista restano una struttura di prodotto da
-validare; non è codificata alcuna determinazione legale automatica CFSL 6508.
+espone un token o finge di aver inviato un'email. Un registro locale separato dalla
+fatturazione può riservare una richiesta di contatto legata a un caso autorizzato,
+senza mostrare recapiti, inviare messaggi, effettuare chiamate o addebitare importi.
+La cadenza resta un'ipotesi configurabile; non è codificata alcuna determinazione
+legale automatica CFSL 6508. Dettagli e limiti sono in `docs/CONSULTATIONS_LOCAL.md`.
 
 ## Verifica
 Installa requirements-dev.txt ed esegui:
