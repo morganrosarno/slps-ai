@@ -167,13 +167,16 @@
       const card = make('article', null, 'history-item'); card.dataset.caseId = item.id;
       const body = make('div', null, 'history-item-body'); body.append(make('h3', caseExcerpt(item.summary, 'Analisi senza sintesi')));
       body.append(make('p', caseDate(item.created_at), 'history-date'));
+      if (item.deletion_pending) body.append(make('p', 'Il caso non è consultabile. Riprova per completare la rimozione dei file dal server.', 'notice warning'));
       if (item.context) body.append(make('p', caseExcerpt(item.context), 'history-context'));
       const actions = make('div', null, 'history-actions');
-      const open = make('button', 'Apri analisi', 'button subtle'); open.type = 'button';
-      open.addEventListener('click', () => openCase(item.id, open));
-      const remove = make('button', 'Elimina', 'button danger'); remove.type = 'button';
+      if (!item.deletion_pending) {
+        const open = make('button', 'Apri analisi', 'button subtle'); open.type = 'button';
+        open.addEventListener('click', () => openCase(item.id, open)); actions.append(open);
+      }
+      const remove = make('button', item.deletion_pending ? 'Riprova eliminazione' : 'Elimina', 'button danger'); remove.type = 'button';
       remove.addEventListener('click', () => askDeleteCase(item.id, actions, remove));
-      actions.append(open, remove); card.append(body, actions); $('history-list').append(card);
+      actions.append(remove); card.append(body, actions); $('history-list').append(card);
     });
   }
   async function loadCases({ focus = false } = {}) {
@@ -184,7 +187,8 @@
       const data = await api('/api/cases', { headers: { 'X-CSRF-Token': state.csrf } });
       const cases = Array.isArray(data.cases) ? data.cases : [];
       renderCaseList(cases); state.historyLoaded = true;
-      $('history-status').textContent = cases.length ? cases.length + ' analisi salvate disponibili.' : 'Nessuna analisi salvata.';
+      const storageNote = data.storage?.uploads_blocked ? ' Spazio esaurito: lo storico resta consultabile, ma i nuovi file non possono essere salvati.' : data.storage?.warning ? ' Lo spazio dello storico è quasi esaurito.' : '';
+      $('history-status').textContent = (cases.length ? cases.length + ' analisi salvate disponibili.' : 'Nessuna analisi salvata.') + storageNote;
       if (focus) { showView('history'); focusFeedback(cases.length ? 'history-title' : 'history-empty'); }
     } catch (err) {
       if (err.status === 401) { await archiveSessionExpired(); return; }
@@ -200,15 +204,17 @@
       const saved = data.case;
       if (!saved?.analysis || !Array.isArray(saved.analysis.findings)) throw new Error('Il caso salvato è incompleto.');
       const previousImageUrl = state.imageUrl, previousFile = state.file, previousAnswers = new Map(state.answers);
-      state.imageUrl = null; state.file = null; state.answers.clear();
+      const original = Array.isArray(saved.assets) ? saved.assets.find(asset => asset?.role === 'original' && String(asset.media_type || '').startsWith('image/') && asset.download_url) : null;
+      state.imageUrl = original ? original.download_url : null; state.file = null; state.answers.clear();
+      if (state.imageUrl) { $('preview').src = state.imageUrl; $('preview').hidden = false; }
       try { await renderAnalysis(saved.analysis, saved.context || '', { archived: true }); }
-      catch (err) { state.imageUrl = previousImageUrl; state.file = previousFile; state.answers = previousAnswers; throw err; }
-      if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
-      $('photo').value = ''; $('preview-wrap').hidden = true; $('preview').removeAttribute('src');
+      catch (err) { state.imageUrl = previousImageUrl; state.file = previousFile; state.answers = previousAnswers; if (previousImageUrl) $('preview').src = previousImageUrl; else $('preview').removeAttribute('src'); throw err; }
+      if (previousImageUrl && previousImageUrl.startsWith('blob:')) URL.revokeObjectURL(previousImageUrl);
+      $('photo').value = ''; $('preview-wrap').hidden = true;
       state.analysis = saved.analysis; state.submittedContext = saved.context || ''; state.archive = { saved: true, case_id: saved.id }; state.openedCaseId = saved.id; state.editing = false;
       $('context').value = saved.context || ''; showView('analysis');
       $('empty-state').hidden = true; $('report').hidden = false; $('report-title').textContent = 'Analisi salvata';
-      $('report-notice').textContent = 'La fotografia non è conservata nell’archivio. Verifica il rapporto con l’immagine originale prima di usarlo.'; $('report-notice').hidden = false;
+      $('report-notice').textContent = original ? 'Il file originale è conservato nel caso. Il rapporto resta da verificare nelle condizioni effettive.' : 'Questo caso precedente non contiene una fotografia archiviata. Verifica il rapporto con l’immagine originale prima di usarlo.'; $('report-notice').hidden = false;
       $('result-region').setAttribute('aria-labelledby', 'report-title'); $('history-status').textContent = 'Analisi salvata aperta.'; updateButton(); focusFeedback('report-title');
     } catch (err) {
       if (err.status === 401) { await archiveSessionExpired(); return; }
@@ -312,7 +318,7 @@
       await renderAnalysis(data.analysis, context); state.analysis = data.analysis; state.archive = data.archive || null; state.submittedContext = context; state.editing = false; state.openedCaseId = data.archive?.case_id || state.openedCaseId || null;
       if (data.entitlement) state.entitlement = data.entitlement;
       $('report-title').textContent = 'Analisi completata'; $('report-notice').hidden = true;
-      if (data.archive?.saved) { notice('Analisi completata e risultato archiviato senza fotografia.'); loadCases(); }
+      if (data.archive?.saved) { notice('Analisi completata: file originale e rapporto sono archiviati nel caso.' + (data.archive.storage?.warning ? ' Lo spazio dello storico è quasi esaurito.' : '')); loadCases(); }
       else if (data.archive?.message) {
         const exportHint = state.entitlement.export_allowed === false ? ' Il risultato resta consultabile in questa pagina.' : ' Esporta il rapporto se vuoi conservarlo.';
         $('report-notice').textContent = data.archive.message + exportHint;
@@ -417,7 +423,7 @@
     $('assessment-state').textContent = hasUnknown ? 'Valutazione da completare · restano informazioni decisive da verificare.' : 'Osservazioni e misure proposte · da confermare nelle condizioni effettive.';
     $('assessment-state').className = 'assessment-state' + (hasUnknown ? ' incomplete' : '');
     $('findings').replaceChildren();
-    let image = options.archived || !state.imageUrl ? null : $('preview');
+    let image = !state.imageUrl ? null : $('preview');
     if (image) { try { await image.decode(); } catch { image = null; } }
     // Snapshot only the photo and context used by this successful request.
     const meta = analysis.meta || {};
@@ -426,7 +432,7 @@
     if (image && state.imageUrl) {
       const photo = make('img'); photo.src = state.imageUrl; photo.alt = 'Fotografia completa utilizzata per questa analisi'; photo.className = 'case-photo';
       $('case-summary').append(photo);
-    } else $('case-summary').append(make('p', options.archived ? 'Fotografia non conservata nell’archivio. Verificare il rapporto con la foto originale.' : 'Fotografia non disponibile per la stampa. Verificare il rapporto con la foto originale.', 'notice warning'));
+    } else $('case-summary').append(make('p', options.archived ? 'Questo caso non contiene una fotografia archiviata. Verificare il rapporto con la foto originale.' : 'Fotografia non disponibile per la stampa. Verificare il rapporto con la foto originale.', 'notice warning'));
     $('case-summary').append(make('p', 'Contesto e chiarimenti inviati', 'measure-label'), make('p', submittedContext || 'Nessun contesto aggiuntivo fornito.', 'case-context'));
     $('case-summary').append(make('p', 'Data analisi: ' + (meta.created_at || 'non disponibile') + ' · Metodo: ' + (meta.method_version || meta.prompt_version || 'non indicato'), 'case-meta'));
     const decisiveCount = questionList.filter(q => q.critical).length;

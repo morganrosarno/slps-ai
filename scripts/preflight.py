@@ -235,9 +235,22 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
     results.append(check("analysis_limit", rate_ok, "Limite orario delle analisi valido.",
                          "SLPS_ANALYSES_PER_HOUR deve essere un intero tra 1 e 100."))
 
+    history_capacity_raw = env.get("SLPS_MAX_HISTORY_BYTES_PER_TENANT", str(1024 * 1024 * 1024)).strip()
+    try:
+        history_capacity = int(history_capacity_raw)
+        history_capacity_ok = history_capacity >= 1024 * 1024
+    except ValueError:
+        history_capacity_ok = False
+    results.append(check(
+        "history_capacity", history_capacity_ok,
+        "Limite di spazio per azienda configurato.",
+        "SLPS_MAX_HISTORY_BYTES_PER_TENANT deve essere un intero di almeno 1048576 byte.",
+    ))
+
     for check_id, variable, label in (
         ("rate", "SLPS_RATE_DB_PATH", "dei limiti"),
         ("case", "SLPS_CASE_DB_PATH", "dei casi"),
+        ("history", "SLPS_HISTORY_ROOT", "dei file originali e derivati"),
     ):
         path_setting = env.get(variable, "")
         if not path_setting.strip():
@@ -251,7 +264,7 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
         results.append(Check(f"{check_id}_volume", "warning", "warning",
                              f"Controllo offline: montaggio e persistenza dell'archivio {label} dopo riavvio o deploy non verificati sul provider."))
     results.append(Check("archive_recovery", "warning", "warning",
-                         "Controllo offline: backup e ripristino dell'archivio dei casi non verificati; richiedono una prova separata."))
+                         "La prova sintetica locale di backup/ripristino non verifica snapshot, cifratura e ripristino sul provider di destinazione."))
 
     procfile = root / "Procfile"
     try:

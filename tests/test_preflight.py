@@ -28,6 +28,8 @@ class PreflightTests(unittest.TestCase):
             "SLPS_ANALYSES_PER_HOUR": "3",
             "SLPS_RATE_DB_PATH": "/var/data/limits.sqlite3",
             "SLPS_CASE_DB_PATH": "/var/data/cases.sqlite3",
+            "SLPS_HISTORY_ROOT": "/var/data/history-media",
+            "SLPS_MAX_HISTORY_BYTES_PER_TENANT": "1073741824",
             "SLPS_PILOT_TENANT_ID": "test-tenant_1",
             "SLPS_PILOT_OWNER_ID": "test-owner.1",
         }
@@ -52,6 +54,8 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(checks["rate_volume"]["status"], "warning")
             self.assertEqual(checks["case_path"]["status"], "pass")
             self.assertEqual(checks["case_volume"]["status"], "warning")
+            self.assertEqual(checks["history_path"]["status"], "pass")
+            self.assertEqual(checks["history_capacity"]["status"], "pass")
             self.assertEqual(checks["archive_recovery"]["status"], "warning")
             self.assertEqual(checks["provider_verification"]["status"], "warning")
             self.assertEqual(checks["tenant_id"]["status"], "pass")
@@ -66,7 +70,8 @@ class PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             env = self.configured(root)
-            for check_id, variable in (("rate", "SLPS_RATE_DB_PATH"), ("case", "SLPS_CASE_DB_PATH")):
+            for check_id, variable in (("rate", "SLPS_RATE_DB_PATH"), ("case", "SLPS_CASE_DB_PATH"),
+                                       ("history", "SLPS_HISTORY_ROOT")):
                 env.pop(variable)
                 checks = {item.id: item for item in preflight.run_checks(env, root)}
                 self.assertEqual(checks[f"{check_id}_path"].status, "warning")

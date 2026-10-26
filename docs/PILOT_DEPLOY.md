@@ -31,6 +31,9 @@ Impostare inoltre:
 - `SLPS_ANALYSES_PER_HOUR` al limite autorizzato
 - `SLPS_RATE_DB_PATH` su un volume persistente, se disponibile
 - `SLPS_CASE_DB_PATH` sullo stesso volume persistente, se disponibile
+- `SLPS_HISTORY_ROOT` su una cartella privata dello stesso ambiente persistente
+- `SLPS_MAX_HISTORY_BYTES_PER_TENANT` al limite approvato; il superamento blocca
+  nuovi salvataggi senza cancellare casi esistenti
 - `SLPS_PILOT_TENANT_ID` e `SLPS_PILOT_OWNER_ID` con identificativi interni stabili
 
 Per il profilo account impostare invece:
@@ -45,7 +48,7 @@ per il collaudo. Non apre il database in scrittura e non crea utenti. La
 registrazione aperta senza consegna è segnalata come blocco, non come servizio
 pronto. Il flusso completo è descritto in `docs/ACCOUNTS_LOCAL.md`.
 
-Senza volume persistente il pilota può funzionare, ma contatori e archivio casi
+Senza volume persistente il pilota può funzionare, ma contatori, rapporti e file dello storico
 possono azzerarsi dopo riavvio o deploy. Non presentare quindi l'archivio come
 duraturo finché persistenza, backup e ripristino non sono stati provati.
 

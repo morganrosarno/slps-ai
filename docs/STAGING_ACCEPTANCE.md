@@ -23,9 +23,9 @@ un test con risposte simulate non soddisfa questo collaudo.
 | Rilievi comprensibili | Ogni rilievo mostra cosa fare, entro quando e l'evidenza; il ritaglio deriva dalla foto effettiva. Nessuna classificazione basata solo sul colore. |
 | Incertezza | Le domande decisive restano visibili; le risposte aggiornano il contesto. Un errore conserva e identifica l'eventuale rapporto precedente. |
 | Interfaccia | Desktop e telefono a 390 px: navigazione, upload, caricamento, errore, risultato e archivio verificati con tastiera e senza scorrimento orizzontale. |
-| Archivio | Elenco, apertura e cancellazione confermata; accessi di altri proprietari/aziende respinti. L'assenza delle foto archiviate viene dichiarata. |
+| Archivio | Elenco, apertura e cancellazione confermata di rapporto e file; originali visibili nel caso; accessi di altri proprietari/aziende respinti; quota piena senza cancellazione automatica. |
 | Stampa ed esportazione | Il rapporto esportato e la stampa riportano il caso corretto, le domande aperte, il contesto e la foto quando disponibile. |
-| Persistenza | Un caso e i contatori sopravvivono al riavvio e al redeploy; backup e ripristino provati nell'ambiente di destinazione. |
+| Persistenza | Rapporto, originali, derivati e contatori sopravvivono al riavvio e al redeploy; backup e ripristino provati nell'ambiente di destinazione. |
 | Revisione professionale | Valutazione delle risposte reali da parte del responsabile SLPS; omissioni critiche e falsi positivi registrati. Il numero di test software non sostituisce questa verifica. |
 
 Ogni nuova analisi, compreso l'aggiornamento dopo chiarimenti, può consumare API.

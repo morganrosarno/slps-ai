@@ -11,7 +11,7 @@ const script = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const template = fs.readFileSync(path.join(root, 'templates/index.html'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseListStatus = 200, sessionResponses = [], deferHistory = false, sessionData = {} } = {}) {
+async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseStorage = null, caseListStatus = 200, sessionResponses = [], deferHistory = false, sessionData = {} } = {}) {
   const elements = new Map(), requests = [], historyGets = [], scrolls = [], exports = [], prints = [], navigations = [];
   let currentCases = [...initialCases];
   let doc;
@@ -56,8 +56,8 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
         const next = sessionResponses.shift(); return next ? response(next.data, next.status || 200) : response(session);
       }
       if (url === '/api/cases' && (!options.method || options.method === 'GET')) {
-        if (deferHistory) return new Promise(resolve => historyGets.push({ url, options, resolve: () => resolve(response({ cases: currentCases })) }));
-        historyGets.push({ url, options }); return caseListStatus < 400 ? response({ cases: currentCases }) : response({ error: { message: 'Archivio temporaneamente non disponibile' } }, caseListStatus);
+        if (deferHistory) return new Promise(resolve => historyGets.push({ url, options, resolve: () => resolve(response({ cases: currentCases, storage: caseStorage })) }));
+        historyGets.push({ url, options }); return caseListStatus < 400 ? response({ cases: currentCases, storage: caseStorage }) : response({ error: { message: 'Archivio temporaneamente non disponibile' } }, caseListStatus);
       }
       return new Promise(resolve => requests.push({ url, options, resolve: (data, status) => resolve(response(data, status)) }));
     } };
@@ -320,6 +320,24 @@ test('authenticated case history exposes loading, empty and readable saved-case 
   empty.$('refresh-history').click(); await tick(); assert.equal(empty.doc.activeElement.id, 'history-empty');
 });
 
+test('history warns before capacity blocks new uploads without hiding saved cases', async () => {
+  const saved = { id: 'capacity-case', created_at: 1792920000, summary: 'Caso conservato', context: '' };
+  const f = await fixture({ initialCases: [saved], caseStorage: { warning: true, uploads_blocked: false } }); await tick();
+  assert.equal(f.$('history-list').childNodes.length, 1);
+  assert.match(f.$('history-status').textContent, /quasi esaurito/);
+  const full = await fixture({ initialCases: [saved], caseStorage: { warning: true, uploads_blocked: true } }); await tick();
+  assert.match(full.$('history-status').textContent, /nuovi file non possono essere salvati/);
+});
+
+test('a pending deletion remains visible only as a retryable cleanup action', async () => {
+  const pending = { id: 'pending-delete', created_at: 1792920000, summary: 'Eliminazione da completare', context: '', deletion_pending: true };
+  const f = await fixture({ initialCases: [pending] }); await tick();
+  const card = f.$('history-list').childNodes[0], buttons = card.querySelectorAll('button');
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].textContent, 'Riprova eliminazione');
+  assert.match(card.textContent, /non è consultabile.*Riprova/s);
+});
+
 test('case history failure is explicit and receives focus after a manual retry', async () => {
   const f = await fixture({ caseListStatus: 503 }); await tick();
   assert.equal(f.$('history-loading').hidden, true); assert.equal(f.$('history-error').hidden, false);
@@ -335,7 +353,7 @@ test('an expired session while listing cases returns to login without retrying',
   assert.equal(f.historyGets.length, 1); assert.equal(f.requests.length, 0);
 });
 
-test('opening a saved case renders its report without inventing a stored photograph', async () => {
+test('an older saved case without media states that the photograph is unavailable', async () => {
   const saved = { id: 'saved-case', created_at: 1792920000, summary: 'Sintesi archivio', context: 'Contesto archiviato' };
   const f = await fixture({ initialCases: [saved] }); await tick();
   const open = f.$('history-list').querySelectorAll('button')[0]; open.click(); await tick();
@@ -343,10 +361,24 @@ test('opening a saved case renders its report without inventing a stored photogr
   assert.equal(f.requests[0].options.headers['X-CSRF-Token'], f.session.csrf);
   await f.finishRequest('/api/cases/saved-case', { case: { ...saved, analysis: { ...report('Rapporto riaperto'), findings: [finding('S1')] } } });
   assert.equal(f.$('report').hidden, false); assert.equal(f.$('report-title').textContent, 'Analisi salvata');
-  assert.equal(f.doc.activeElement.id, 'report-title'); assert.match(f.$('case-summary').textContent, /Fotografia non conservata.*Contesto archiviato/);
-  assert.match(f.$('report-notice').textContent, /fotografia non è conservata/);
+  assert.equal(f.doc.activeElement.id, 'report-title'); assert.match(f.$('case-summary').textContent, /non contiene una fotografia archiviata.*Contesto archiviato/);
+  assert.match(f.$('report-notice').textContent, /caso precedente non contiene/);
   const fallback = f.$('findings').childNodes[0].querySelector('.crop-fallback');
   assert.equal(fallback.querySelector('a'), null); assert.match(fallback.textContent, /foto originale/);
+});
+
+test('opening a new saved case renders its protected original photograph', async () => {
+  const saved = { id: 'saved-with-photo', created_at: 1792920000, summary: 'Sintesi archivio', context: 'Contesto archiviato' };
+  const f = await fixture({ initialCases: [saved], imageAvailable: true }); await tick();
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/saved-with-photo', { case: {
+    ...saved, analysis: { ...report('Rapporto riaperto'), findings: [finding('S1')] },
+    assets: [{ id: 'asset-1', role: 'original', media_type: 'image/jpeg', download_url: '/api/cases/saved-with-photo/assets/asset-1' }],
+  } });
+  const photo = f.$('case-summary').querySelector('img');
+  assert.equal(photo.src, '/api/cases/saved-with-photo/assets/asset-1');
+  assert.match(f.$('report-notice').textContent, /file originale è conservato/);
+  assert.equal(f.$('questions-photo-note').hidden, false);
 });
 
 test('a malformed saved case cannot replace the current report or selected photograph', async () => {

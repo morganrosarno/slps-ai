@@ -19,9 +19,9 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
   azienda, indipendentemente dalle vecchie impostazioni del pilota.
 - Un ciclo di chiarimento sul caso salvato è incluso e conteggiato separatamente. Ulteriori
   chiarimenti e nuove analisi sono bloccati prima della chiamata al fornitore. Il chiarimento
-  accetta soltanto la stessa immagine normalizzata: nell'archivio resta la sua impronta
-  SHA-256, non la fotografia.
-- Upload foto solo in memoria, controllo coerente di MIME, estensione e contenuto, limite
+  accetta soltanto la stessa immagine normalizzata: l'archivio lega impronta
+  SHA-256, originale e copia normalizzata allo stesso caso.
+- Upload foto elaborato inizialmente in memoria, controllo coerente di MIME, estensione e contenuto, limite
   configurabile (10 MB per default), 25 megapixel e rimozione dei metadati.
 - Verifica tecnica locale dei video MP4, WebM e MOV (50 MB e 30 secondi per default):
   `ffprobe` valida contenuto e durata, mentre `ffmpeg` estrae un numero adattivo di
@@ -30,9 +30,10 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
   errore. Non vengono ancora interpretate tracce audio multiple e il campionamento non
   equivale al rilevamento di ogni scena o evento. La verifica non chiama un
   fornitore AI e non consuma la prova gratuita; trascrizione, comprensione audio, analisi
-  dei rischi e conservazione del file originale sono indicate chiaramente come non ancora
-  implementate.
-- Archivio SQLite dei risultati, senza fotografia, sempre filtrato per azienda e proprietario.
+  dei rischi e salvataggio del video tramite questo endpoint sono indicati chiaramente come
+  non ancora implementati; il formato dello storico è già predisposto e testato con media sintetici.
+- Storico privato dei casi: rapporto in SQLite e file originali/derivati fuori
+  dal database, sempre filtrati per azienda e proprietario.
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
 - Sito di presentazione su `/` e interfaccia autenticata su `/app/`, nello stesso servizio.
 - Navigazione tra nuova analisi e archivio, passaggi foto/contesto/risultato e rapporto operativo.
@@ -68,8 +69,10 @@ Il server elimina riferimenti del modello non presenti nel registro.
 Questo controllo non dimostra da solo la pertinenza o correttezza legale dei testi generati.
 
 ## Dati e limiti
-Le foto non vengono conservate sul server. Il risultato strutturato e il contesto fornito
-vengono archiviati in SQLite per l'azienda e il proprietario configurati.
+Il risultato strutturato e il contesto vengono archiviati in SQLite; il file
+foto originale e la copia normalizzata vengono conservati nella cartella privata
+configurata per lo storico. Il formato dell'archivio supporta anche video con
+audio e derivati, mentre la pipeline AI video resta da collegare.
 L’interfaccia autenticata consente di elencare, aprire ed eliminare con conferma i propri casi;
 usa le API già filtrate per azienda e proprietario.
 Un identificativo di caso non consente da solo l'accesso: ogni operazione applica anche
@@ -85,15 +88,20 @@ non vengono offerte dall'interfaccia. Questo non può impedire screenshot o funz
 browser. I piani e i pagamenti non sono ancora implementati. Se il caso iniziale non può
 essere archiviato, il risultato resta leggibile ma il chiarimento incluso non è disponibile.
 SQLite conserva anche contatori e impronte degli indirizzi per i limiti; i record scaduti
-sono rimossi alle richieste successive. SLPS_RATE_DB_PATH e SLPS_CASE_DB_PATH devono stare
+sono rimossi alle richieste successive. SLPS_RATE_DB_PATH, SLPS_CASE_DB_PATH e
+SLPS_HISTORY_ROOT devono stare
 su un volume persistente se limiti e casi devono sopravvivere ai redeploy. Un solo server
 applicativo è supportato in questa fase.
 L'isolamento applicativo per azienda/proprietario è implementato e coperto da test.
 La modalità predefinita conserva l'accesso singolo del pilota. La modalità opzionale
 account aggiunge identità aziendali e personali, ma l'archivio dei casi resta anche
 separato per proprietario: la condivisione dei casi fra colleghi non è ancora implementata.
-Mancano assegnazione e chiusura delle misure, backup/ripristino e verifica di persistenza sul provider.
+Mancano assegnazione e chiusura delle misure e verifica di persistenza sul provider.
 Non usarlo ancora come archivio aziendale di produzione.
+
+La fondazione locale di conservazione, quote, cancellazione e backup/ripristino
+è descritta in `docs/HISTORY_LOCAL.md`. Non applica scadenze automatiche: al
+limite di capacità blocca nuovi salvataggi senza eliminare lo storico esistente.
 
 La fondazione della registrazione self-service è descritta in `docs/ACCOUNTS_LOCAL.md`.
 È disattivata per default; nel collaudo locale l'invio email e la verifica reale
@@ -137,7 +145,8 @@ Le viste e i test con dati sintetici non soddisfano la verifica del motore AI re
 1. Prova completa con API attiva e modello scelto: foto → analisi → chiarimento → riesame.
 2. Fonti normative controllate e tracciabili, con verifica di pertinenza.
 3. Collaudo della cronologia; assegnazione delle misure, evidenze e conferma della chiusura.
-4. Gestione account, cancellazione e backup/ripristino verificati sull'hosting.
+4. Gestione account, cancellazione e backup/ripristino verificati sull'hosting;
+   applicare il ciclo di chiusura account documentato.
 5. Casi di accettazione definiti dal responsabile SLPS, inclusi alcuni casi reali non usati per modificare il metodo.
 6. Prezzo sulla base di costi misurati, condizioni, informativa e assistenza.
 7. Prova con pochi clienti prima di ampliare l'accesso.

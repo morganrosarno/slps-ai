@@ -33,8 +33,9 @@ onboarding or password recovery. Do not expose tokens in logs, URLs or chat.
 Every protected account request reloads the user, verification flags and session
 version from SQLite. Mode changes invalidate the old authentication session.
 The trial entitlement is shared by all approved users of the same company.
-The archive still filters by company **and owner**; shared company case access,
-full original-media retention, plan/subscription benefits, invitation workflow,
+The archive filters by company **and owner** and now retains original media in
+the protected local history foundation. Shared company case access,
+plan/subscription benefits, invitation workflow,
 real company-verification policy and delivery remain separate future work.
 No names, prices, consultation counts or response-time promises are fixed here.
 

@@ -1,4 +1,4 @@
-"""Private SLPS pilot with opt-in company accounts; photos stay in memory."""
+"""Private SLPS pilot with opt-in company accounts and protected case history."""
 from datetime import timedelta
 from contextlib import contextmanager
 from functools import wraps
@@ -10,12 +10,13 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import sqlite3
 import time
 from urllib.parse import urlsplit
 import warnings
 
-from flask import Flask, Request, jsonify, redirect, render_template, request, session
+from flask import Flask, Request, jsonify, redirect, render_template, request, send_file, session
 from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
@@ -41,6 +42,13 @@ VIDEO_MEDIA = {
 FORMAT_MEDIA = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MAX_CASE_JSON_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_HISTORY_BYTES = 1024 * 1024 * 1024
+HISTORY_WARNING_RATIO = 0.80
+ASSET_ROLES = {"original", "normalized", "crop", "frame", "audio", "transcript", "derived"}
+
+
+class CaseDeletionPending(RuntimeError):
+    """A case is hidden, but server-side file removal still needs a retry."""
 
 
 class MemoryUploadRequest(Request):
@@ -230,10 +238,28 @@ class LimitStore:
 
 
 class CaseStore:
-    """Archive results without photographs, scoped by tenant and owner."""
-    def __init__(self, path):
+    """Private case archive with file assets scoped by tenant and owner.
+
+    Binary media never enters SQLite. It is stored under generated identifiers,
+    while the database contains only metadata and report JSON. The application
+    currently authorizes the same owner-private view used by the existing case
+    routes; tenant scoping also makes cross-company access fail closed.
+    """
+    def __init__(self, path, media_root=None, max_history_bytes=DEFAULT_MAX_HISTORY_BYTES):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.media_root = Path(media_root or (self.path.parent / "history-media"))
+        self.media_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (self.media_root / ".staging").mkdir(exist_ok=True, mode=0o700)
+        (self.media_root / ".trash").mkdir(exist_ok=True, mode=0o700)
+        for directory in (self.media_root, self.media_root / ".staging", self.media_root / ".trash"):
+            try:
+                directory.chmod(0o700)
+            except OSError:
+                pass
+        self.max_history_bytes = int(max_history_bytes)
+        if self.max_history_bytes < 1:
+            raise ValueError("History capacity must be positive")
         with self.connect() as db:
             db.execute(
                 """CREATE TABLE IF NOT EXISTS cases (
@@ -253,6 +279,38 @@ class CaseStore:
                 "CREATE INDEX IF NOT EXISTS cases_owner_created "
                 "ON cases(tenant_id, owner_id, created DESC)"
             )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS case_assets (
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    byte_size INTEGER NOT NULL CHECK(byte_size >= 0),
+                    sha256 TEXT NOT NULL,
+                    relative_path TEXT NOT NULL UNIQUE,
+                    created REAL NOT NULL,
+                    FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
+                )"""
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS assets_scope_case "
+                "ON case_assets(tenant_id, owner_id, case_id, created)"
+            )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS case_deletions (
+                    case_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    trash_relative_path TEXT NOT NULL UNIQUE,
+                    requested REAL NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error REAL,
+                    FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
+                )"""
+            )
         try:
             self.path.chmod(0o600)
         except OSError:
@@ -262,45 +320,151 @@ class CaseStore:
     def connect(self):
         db = sqlite3.connect(self.path, timeout=5)
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
         try:
             with db:
                 yield db
         finally:
             db.close()
 
-    def create(self, tenant_id, owner_id, context, analysis, image_sha256, max_cases):
+    @staticmethod
+    def _asset_payload(asset):
+        if not isinstance(asset, dict) or asset.get("role") not in ASSET_ROLES:
+            raise ValueError("Invalid history asset role")
+        data = asset.get("data")
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("History assets must contain bytes")
+        media_type = str(asset.get("media_type", "application/octet-stream")).lower()[:128]
+        if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", media_type):
+            raise ValueError("Invalid history asset media type")
+        filename = Path(str(asset.get("filename") or "asset")).name[:255] or "asset"
+        filename = re.sub(r"[^A-Za-z0-9._ ()-]+", "_", filename).strip(" .") or "asset"
+        return bytes(data), asset["role"], filename, media_type
+
+    def _safe_path(self, relative_path):
+        target = (self.media_root / relative_path).resolve()
+        root = self.media_root.resolve()
+        if target == root or root not in target.parents:
+            raise OSError("Unsafe history path")
+        return target
+
+    @staticmethod
+    def _write_private(path, data):
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def create(self, tenant_id, owner_id, context, analysis, image_sha256, max_cases, assets=None):
         encoded = json.dumps(analysis, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > MAX_CASE_JSON_BYTES:
             return None, "too_large"
         now = time.time()
         case_id = secrets.token_urlsafe(18)
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            count = db.execute(
-                "SELECT COUNT(*) FROM cases WHERE tenant_id=? AND owner_id=?",
-                (tenant_id, owner_id),
-            ).fetchone()[0]
-            if count >= max_cases:
-                return None, "limit"
-            db.execute(
-                """INSERT INTO cases
-                   (id, tenant_id, owner_id, created, context, analysis_json, image_sha256)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (case_id, tenant_id, owner_id, now, context, encoded, image_sha256),
-            )
+        prepared = []
+        total_new_bytes = 0
+        stage = self.media_root / ".staging" / secrets.token_urlsafe(18)
+        stage.mkdir(mode=0o700)
+        final_relative = Path("cases") / case_id
+        final = self._safe_path(final_relative)
+        try:
+            for asset in assets or []:
+                data, role, filename, media_type = self._asset_payload(asset)
+                asset_id = secrets.token_urlsafe(18)
+                stored_name = asset_id + ".bin"
+                self._write_private(stage / stored_name, data)
+                prepared.append({
+                    "id": asset_id, "role": role, "filename": filename,
+                    "media_type": media_type, "byte_size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "relative_path": str(final_relative / stored_name),
+                })
+                total_new_bytes += len(data)
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                count = db.execute(
+                    "SELECT COUNT(*) FROM cases WHERE tenant_id=? AND owner_id=?",
+                    (tenant_id, owner_id),
+                ).fetchone()[0]
+                if count >= max_cases:
+                    return None, "limit"
+                used = db.execute(
+                    "SELECT COALESCE(SUM(byte_size), 0) FROM case_assets WHERE tenant_id=?",
+                    (tenant_id,),
+                ).fetchone()[0]
+                if used + total_new_bytes > self.max_history_bytes:
+                    return None, "storage_limit"
+                db.execute(
+                    """INSERT INTO cases
+                       (id, tenant_id, owner_id, created, context, analysis_json, image_sha256)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (case_id, tenant_id, owner_id, now, context, encoded, image_sha256),
+                )
+                for asset in prepared:
+                    db.execute(
+                        """INSERT INTO case_assets
+                           (id, case_id, tenant_id, owner_id, role, filename, media_type,
+                            byte_size, sha256, relative_path, created)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (asset["id"], case_id, tenant_id, owner_id, asset["role"],
+                         asset["filename"], asset["media_type"], asset["byte_size"],
+                         asset["sha256"], asset["relative_path"], now),
+                    )
+                final.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                os.replace(stage, final)
+        except Exception:
+            shutil.rmtree(final, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
         return case_id, None
+
+    @staticmethod
+    def _public_asset(row):
+        return {
+            "id": row["id"], "role": row["role"], "filename": row["filename"],
+            "media_type": row["media_type"], "byte_size": row["byte_size"],
+            "sha256": row["sha256"],
+        }
+
+    def storage_status(self, tenant_id):
+        with self.connect() as db:
+            used = int(db.execute(
+                "SELECT COALESCE(SUM(byte_size), 0) FROM case_assets WHERE tenant_id=?",
+                (tenant_id,),
+            ).fetchone()[0])
+        remaining = max(0, self.max_history_bytes - used)
+        return {
+            "used_bytes": used,
+            "limit_bytes": self.max_history_bytes,
+            "remaining_bytes": remaining,
+            "warning": used >= int(self.max_history_bytes * HISTORY_WARNING_RATIO),
+            "uploads_blocked": used >= self.max_history_bytes,
+        }
 
     def list(self, tenant_id, owner_id):
         with self.connect() as db:
             rows = db.execute(
-                """SELECT id, created, context, analysis_json
-                   FROM cases
-                   WHERE tenant_id=? AND owner_id=?
-                   ORDER BY created DESC""",
+                """SELECT c.id, c.created, c.context, c.analysis_json,
+                          d.case_id AS deletion_pending
+                   FROM cases c
+                   LEFT JOIN case_deletions d ON d.case_id=c.id
+                   WHERE c.tenant_id=? AND c.owner_id=?
+                   ORDER BY c.created DESC""",
                 (tenant_id, owner_id),
             ).fetchall()
         cases = []
         for row in rows:
+            if row["deletion_pending"]:
+                cases.append({
+                    "id": row["id"],
+                    "created_at": row["created"],
+                    "context": "",
+                    "summary": "Eliminazione da completare",
+                    "deletion_pending": True,
+                })
+                continue
             analysis = json.loads(row["analysis_json"])
             cases.append({
                 "id": row["id"],
@@ -313,36 +477,225 @@ class CaseStore:
     def get(self, case_id, tenant_id, owner_id):
         with self.connect() as db:
             row = db.execute(
-                """SELECT id, created, context, analysis_json
-                   FROM cases
-                   WHERE id=? AND tenant_id=? AND owner_id=?""",
+                """SELECT c.id, c.created, c.context, c.analysis_json
+                   FROM cases c
+                   WHERE c.id=? AND c.tenant_id=? AND c.owner_id=?
+                     AND NOT EXISTS (
+                       SELECT 1 FROM case_deletions d WHERE d.case_id=c.id
+                     )""",
                 (case_id, tenant_id, owner_id),
             ).fetchone()
+            assets = db.execute(
+                """SELECT id, role, filename, media_type, byte_size, sha256
+                   FROM case_assets WHERE case_id=? AND tenant_id=? AND owner_id=?
+                   ORDER BY created, id""",
+                (case_id, tenant_id, owner_id),
+            ).fetchall() if row else []
         if not row:
             return None
+        public_assets = [self._public_asset(asset) for asset in assets]
+        for asset in public_assets:
+            asset["download_url"] = f"/api/cases/{case_id}/assets/{asset['id']}"
         return {
             "id": row["id"],
             "created_at": row["created"],
             "context": row["context"],
             "analysis": json.loads(row["analysis_json"]),
+            "assets": public_assets,
+            "report": {"stored": True, "media_type": "application/json"},
         }
+
+    def asset(self, case_id, asset_id, tenant_id, owner_id):
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT a.id, a.role, a.filename, a.media_type, a.byte_size,
+                          a.sha256, a.relative_path
+                   FROM case_assets a
+                   WHERE a.id=? AND a.case_id=? AND a.tenant_id=? AND a.owner_id=?
+                     AND NOT EXISTS (
+                       SELECT 1 FROM case_deletions d WHERE d.case_id=a.case_id
+                     )""",
+                (asset_id, case_id, tenant_id, owner_id),
+            ).fetchone()
+        if not row:
+            return None
+        relative = Path(row["relative_path"])
+        if len(relative.parts) != 3 or relative.parts[:2] != ("cases", case_id):
+            return None
+        path = self._safe_path(row["relative_path"])
+        if not path.is_file() or path.is_symlink():
+            return None
+        result = self._public_asset(row)
+        result["path"] = path
+        return result
 
     def image_sha256(self, case_id, tenant_id, owner_id):
         with self.connect() as db:
             row = db.execute(
-                """SELECT image_sha256 FROM cases
-                   WHERE id=? AND tenant_id=? AND owner_id=?""",
+                """SELECT c.image_sha256 FROM cases c
+                   WHERE c.id=? AND c.tenant_id=? AND c.owner_id=?
+                     AND NOT EXISTS (
+                       SELECT 1 FROM case_deletions d WHERE d.case_id=c.id
+                     )""",
                 (case_id, tenant_id, owner_id),
             ).fetchone()
         return row["image_sha256"] if row else None
 
     def delete(self, case_id, tenant_id, owner_id):
         with self.connect() as db:
-            cursor = db.execute(
-                "DELETE FROM cases WHERE id=? AND tenant_id=? AND owner_id=?",
+            db.execute("BEGIN IMMEDIATE")
+            authorized = db.execute(
+                "SELECT 1 FROM cases WHERE id=? AND tenant_id=? AND owner_id=?",
                 (case_id, tenant_id, owner_id),
-            )
-        return cursor.rowcount == 1
+            ).fetchone()
+            if not authorized:
+                return False
+            deletion = db.execute(
+                """SELECT trash_relative_path FROM case_deletions
+                   WHERE case_id=? AND tenant_id=? AND owner_id=?""",
+                (case_id, tenant_id, owner_id),
+            ).fetchone()
+            if deletion:
+                trash_relative = deletion["trash_relative_path"]
+            else:
+                trash_relative = str(Path(".trash") / (case_id + "-" + secrets.token_urlsafe(12)))
+                db.execute(
+                    """INSERT INTO case_deletions
+                       (case_id, tenant_id, owner_id, trash_relative_path, requested)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (case_id, tenant_id, owner_id, trash_relative, time.time()),
+                )
+        final = self._safe_path(Path("cases") / case_id)
+        try:
+            trash_path = Path(trash_relative)
+            if (len(trash_path.parts) != 2 or trash_path.parts[0] != ".trash"
+                    or not trash_path.name.startswith(case_id + "-")):
+                raise OSError("Invalid deletion tombstone path")
+            trash = self._safe_path(trash_path)
+            if final.exists() and trash.exists():
+                raise OSError("History deletion paths are inconsistent")
+            if final.exists():
+                os.replace(final, trash)
+            if trash.exists():
+                shutil.rmtree(trash)
+        except OSError as exc:
+            with self.connect() as db:
+                db.execute(
+                    """UPDATE case_deletions
+                       SET attempts=attempts+1, last_error=?
+                       WHERE case_id=? AND tenant_id=? AND owner_id=?""",
+                    (time.time(), case_id, tenant_id, owner_id),
+                )
+            raise CaseDeletionPending("Case file deletion requires retry") from exc
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                cursor = db.execute(
+                    "DELETE FROM cases WHERE id=? AND tenant_id=? AND owner_id=?",
+                    (case_id, tenant_id, owner_id),
+                )
+                if cursor.rowcount != 1:
+                    raise CaseDeletionPending("Case record deletion requires retry")
+        except sqlite3.Error as exc:
+            raise CaseDeletionPending("Case record deletion requires retry") from exc
+        return True
+
+    def delete_owner_history(self, tenant_id, owner_id):
+        """Delete all owner-visible history for an approved account-closure job."""
+        with self.connect() as db:
+            case_ids = [row[0] for row in db.execute(
+                "SELECT id FROM cases WHERE tenant_id=? AND owner_id=?",
+                (tenant_id, owner_id),
+            ).fetchall()]
+        deleted = 0
+        for case_id in case_ids:
+            deleted += int(self.delete(case_id, tenant_id, owner_id))
+        return deleted
+
+    def backup(self, destination):
+        """Create a verified local snapshot without placing media in the database."""
+        destination = Path(destination)
+        if destination.exists() and any(destination.iterdir()):
+            raise FileExistsError("Backup destination is not empty")
+        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination.chmod(0o700)
+        backup_db = destination / "cases.sqlite3"
+        with sqlite3.connect(self.path) as source, sqlite3.connect(backup_db) as target:
+            source.backup(target)
+        media_backup = destination / "media"
+        media_backup.mkdir(mode=0o700)
+        with sqlite3.connect(backup_db) as db:
+            rows = db.execute("SELECT relative_path, sha256, byte_size FROM case_assets").fetchall()
+        files = []
+        for relative_path, expected_hash, expected_size in rows:
+            source = self._safe_path(relative_path)
+            target = media_backup / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(source, target)
+            target.chmod(0o600)
+            data = target.read_bytes()
+            if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_hash:
+                raise OSError("Backup verification failed")
+            files.append({"relative_path": relative_path, "sha256": expected_hash, "byte_size": expected_size})
+        database_bytes = backup_db.read_bytes()
+        manifest = {
+            "format": 1,
+            "created_at": time.time(),
+            "database_sha256": hashlib.sha256(database_bytes).hexdigest(),
+            "database_bytes": len(database_bytes),
+            "files": files,
+        }
+        (destination / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+        (destination / "manifest.json").chmod(0o600)
+        backup_db.chmod(0o600)
+        return manifest
+
+    @classmethod
+    def restore(cls, backup, target_db, target_media_root, max_history_bytes=DEFAULT_MAX_HISTORY_BYTES):
+        """Verify and restore a snapshot into empty destinations."""
+        backup, target_db, target_media_root = Path(backup), Path(target_db), Path(target_media_root)
+        if target_db.exists() or (target_media_root.exists() and any(target_media_root.iterdir())):
+            raise FileExistsError("Restore destination must be empty")
+        manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("format") != 1 or not isinstance(manifest.get("files"), list):
+            raise ValueError("Unsupported backup manifest")
+        database_source = backup / "cases.sqlite3"
+        database_bytes = database_source.read_bytes()
+        if (len(database_bytes) != manifest.get("database_bytes")
+                or hashlib.sha256(database_bytes).hexdigest() != manifest.get("database_sha256")):
+            raise OSError("Backup database checksum mismatch")
+        with sqlite3.connect(database_source) as db:
+            indexed = {
+                (row[0], row[1], row[2])
+                for row in db.execute("SELECT relative_path, sha256, byte_size FROM case_assets")
+            }
+        declared = {
+            (item.get("relative_path"), item.get("sha256"), item.get("byte_size"))
+            for item in manifest["files"] if isinstance(item, dict)
+        }
+        if indexed != declared or len(declared) != len(manifest["files"]):
+            raise OSError("Backup manifest does not match database")
+        for item in manifest["files"]:
+            source = (backup / "media" / item["relative_path"]).resolve()
+            media_backup = (backup / "media").resolve()
+            if media_backup not in source.parents or not source.is_file() or source.is_symlink():
+                raise OSError("Unsafe backup asset")
+            data = source.read_bytes()
+            if len(data) != item["byte_size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
+                raise OSError("Backup asset checksum mismatch")
+        target_db.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copyfile(database_source, target_db)
+        target_db.chmod(0o600)
+        target_media_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for item in manifest["files"]:
+            source = backup / "media" / item["relative_path"]
+            target = target_media_root / item["relative_path"]
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(source, target)
+            target.chmod(0o600)
+        return cls(target_db, target_media_root, max_history_bytes)
 
 
 def normalize_image(raw, expected_mime=None, max_bytes=MAX_FILE_BYTES):
@@ -402,6 +755,10 @@ def create_app(test_config=None):
         MAX_VIDEO_SECONDS=int(os.getenv("SLPS_MAX_VIDEO_SECONDS", "30")),
         RATE_DB_PATH=os.getenv("SLPS_RATE_DB_PATH", str(Path(app.instance_path) / "limits.sqlite3")),
         CASE_DB_PATH=os.getenv("SLPS_CASE_DB_PATH", str(Path(app.instance_path) / "cases.sqlite3")),
+        HISTORY_ROOT=os.getenv("SLPS_HISTORY_ROOT"),
+        MAX_HISTORY_BYTES_PER_TENANT=int(os.getenv(
+            "SLPS_MAX_HISTORY_BYTES_PER_TENANT", str(DEFAULT_MAX_HISTORY_BYTES)
+        )),
         PILOT_TENANT_ID=os.getenv("SLPS_PILOT_TENANT_ID", "pilot"),
         PILOT_OWNER_ID=os.getenv("SLPS_PILOT_OWNER_ID", "owner"),
         MAX_CASES_PER_OWNER=int(os.getenv("SLPS_MAX_CASES_PER_OWNER", "100")),
@@ -412,11 +769,17 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    if not app.config.get("HISTORY_ROOT"):
+        app.config["HISTORY_ROOT"] = str(Path(app.config["CASE_DB_PATH"]).parent / "history-media")
     app.config["MAX_CONTENT_LENGTH"] = max(
         app.config["MAX_IMAGE_BYTES"], app.config["MAX_VIDEO_BYTES"]
     ) + 128 * 1024
     store = LimitStore(app.config["RATE_DB_PATH"])
-    case_store = CaseStore(app.config["CASE_DB_PATH"])
+    case_store = CaseStore(
+        app.config["CASE_DB_PATH"],
+        app.config["HISTORY_ROOT"],
+        app.config["MAX_HISTORY_BYTES_PER_TENANT"],
+    )
     app.extensions["limit_store"] = store
     app.extensions["case_store"] = case_store
     accounts = AccountStore(app.config["ACCOUNT_DB_PATH"]) if app.config["AUTH_MODE"] == "accounts" else None
@@ -441,6 +804,7 @@ def create_app(test_config=None):
             and 1024 <= app.config.get("MAX_IMAGE_BYTES", 0) <= 100 * 1024 * 1024
             and 1024 <= app.config.get("MAX_VIDEO_BYTES", 0) <= 1024 * 1024 * 1024
             and 1 <= app.config.get("MAX_VIDEO_SECONDS", 0) <= 3600
+            and 1 <= app.config.get("MAX_HISTORY_BYTES_PER_TENANT", 0)
         )
         if account_mode():
             return common and accounts is not None
@@ -549,7 +913,7 @@ def create_app(test_config=None):
         except ValueError:
             return False
 
-    def protect(fn=None, *, allow_unverified=False):
+    def protect(fn=None, *, allow_unverified=False, require_csrf=True):
         def decorator(view):
             @wraps(view)
             def wrapped(*args, **kwargs):
@@ -559,7 +923,7 @@ def create_app(test_config=None):
                 user = current_account() if account_mode() else None
                 if (account_mode() and not user) or not session.get("authenticated") or not session.get("tenant_id") or not session.get("owner_id"):
                     return error("authentication_required", "Accedi per utilizzare il progetto pilota.", 401)
-                if not same_origin() or not csrf_valid():
+                if not same_origin() or (require_csrf and not csrf_valid()):
                     return error("invalid_csrf", "Sessione scaduta: ricarica la pagina e riprova.", 403)
                 if account_mode() and not allow_unverified and not accounts.public(user)["eligible_for_analysis"]:
                     return error("account_verification_required", "Completa la verifica dell’email, dell’azienda e del tuo ruolo prima di analizzare o aprire casi.", 403)
@@ -745,7 +1109,10 @@ def create_app(test_config=None):
     @app.get("/api/cases")
     @protect
     def list_cases():
-        return jsonify(cases=case_store.list(session["tenant_id"], session["owner_id"]))
+        return jsonify(
+            cases=case_store.list(session["tenant_id"], session["owner_id"]),
+            storage=case_store.storage_status(session["tenant_id"]),
+        )
 
     @app.get("/api/cases/<case_id>")
     @protect
@@ -757,12 +1124,38 @@ def create_app(test_config=None):
             return error("case_not_found", "Caso non disponibile.", 404)
         return jsonify(case=case)
 
+    @app.get("/api/cases/<case_id>/assets/<asset_id>")
+    @protect(require_csrf=False)
+    def get_case_asset(case_id, asset_id):
+        if len(case_id) > 64 or len(asset_id) > 64:
+            return error("asset_not_found", "File del caso non disponibile.", 404)
+        asset = case_store.asset(
+            case_id, asset_id, session["tenant_id"], session["owner_id"]
+        )
+        if not asset:
+            return error("asset_not_found", "File del caso non disponibile.", 404)
+        return send_file(
+            asset["path"], mimetype=asset["media_type"],
+            as_attachment=asset["media_type"] not in set(IMAGE_MEDIA.values()),
+            download_name=asset["filename"], conditional=False, max_age=0,
+        )
+
     @app.delete("/api/cases/<case_id>")
     @protect
     def delete_case(case_id):
-        if len(case_id) > 64 or not case_store.delete(
-            case_id, session["tenant_id"], session["owner_id"]
-        ):
+        if len(case_id) > 64:
+            return error("case_not_found", "Caso non disponibile.", 404)
+        try:
+            deleted = case_store.delete(
+                case_id, session["tenant_id"], session["owner_id"]
+            )
+        except CaseDeletionPending:
+            return error(
+                "case_deletion_pending",
+                "Il caso non è più consultabile, ma la rimozione dei file non è completata. Riprova l’eliminazione.",
+                503,
+            )
+        if not deleted:
             return error("case_not_found", "Caso non disponibile.", 404)
         return jsonify(deleted=True)
 
@@ -934,14 +1327,30 @@ def create_app(test_config=None):
                     result,
                     image_sha256,
                     app.config["MAX_CASES_PER_OWNER"],
+                    assets=[
+                        {
+                            "role": "original", "data": raw,
+                            "filename": upload.filename, "media_type": declared_mime,
+                        },
+                        {
+                            "role": "normalized", "data": image,
+                            "filename": "normalized.jpg", "media_type": mime_type,
+                        },
+                    ],
                 )
                 archive = {
                     "saved": bool(case_id),
                     "case_id": case_id,
                     "clarification_available": bool(case_id),
+                    "storage": case_store.storage_status(session["tenant_id"]),
                 }
                 if archive_failure == "limit":
                     archive["message"] = "Archivio pieno: elimina un caso prima di salvarne un altro."
+                elif archive_failure == "storage_limit":
+                    archive["message"] = (
+                        "Spazio archivio esaurito: i casi esistenti restano disponibili, "
+                        "ma questo nuovo caricamento non è stato salvato."
+                    )
                 elif archive_failure:
                     archive["message"] = "Risultato non archiviato: dimensione superiore al limite."
             except (sqlite3.Error, OSError, TypeError):
