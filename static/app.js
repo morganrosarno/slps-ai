@@ -1,32 +1,32 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, mediaKind: null, imageUrl: null, mediaUrl: null, videoInspection: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_intake_enabled: false, video_analysis_enabled: false } };
+  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, mediaKind: null, imageUrl: null, mediaUrl: null, videoInspection: null, technicalArchiveOpen: false, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_intake_enabled: false, video_analysis_enabled: false } };
   const certaintyLabels = { visible: 'Visibile nella foto', reported: 'Riferito dall’utilizzatore', verify: 'Da verificare sul posto' };
   const riskLabels = { high: 'Rischio alto', medium: 'Rischio medio', low: 'Rischio basso', undetermined: 'Rischio da determinare' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
   function syncWorkspace() {
-    const history = state.view === 'history', hasReport = Boolean(state.analysis);
-    $('history-panel').hidden = !history; $('work-grid').hidden = history; $('workflow').hidden = history;
+    const history = state.view === 'history', hasReport = Boolean(state.analysis), hasTechnicalCase = state.technicalArchiveOpen;
+    $('history-panel').hidden = !history; $('work-grid').hidden = history; $('workflow').hidden = history || hasTechnicalCase;
     $('workspace-nav').hidden = !state.authenticated; $('new-analysis').hidden = !state.authenticated;
     $('nav-analysis').className = 'nav-button' + (!history ? ' active' : '');
     $('nav-history').className = 'nav-button' + (history ? ' active' : '');
     ['nav-analysis', 'nav-history'].forEach(id => $(id).removeAttribute('aria-current'));
     $(history ? 'nav-history' : 'nav-analysis').setAttribute('aria-current', 'page');
-    $('workspace-title').textContent = history ? 'Le tue analisi, in un solo posto.' : hasReport && !state.editing ? 'Dalla situazione, alle azioni.' : 'Analizza una situazione di lavoro.';
-    $('workspace-description').textContent = history ? 'Riapri un rapporto, consulta il contesto ed esporta ciò che vuoi conservare.' : hasReport && !state.editing ? 'Verifica le misure proposte e completa le informazioni che mancano.' : 'Inizia da una foto. Aggiungi il contesto. Individua il prossimo passo.';
-    $('work-grid').dataset.mode = state.busy ? 'busy' : hasReport ? state.editing ? 'edit-report' : 'report' : 'input';
-    $('input-panel').hidden = state.busy || (hasReport && !state.editing);
+    $('workspace-title').textContent = history ? 'I tuoi casi, in un solo posto.' : hasTechnicalCase ? 'Verifica tecnica video salvata.' : hasReport && !state.editing ? 'Dalla situazione, alle azioni.' : 'Analizza una situazione di lavoro.';
+    $('workspace-description').textContent = history ? 'Riapri una verifica tecnica o un rapporto e consulta le evidenze conservate.' : hasTechnicalCase ? 'Rivedi il video originale, i fotogrammi e lo stato della traccia audio.' : hasReport && !state.editing ? 'Verifica le misure proposte e completa le informazioni che mancano.' : 'Inizia da una foto. Aggiungi il contesto. Individua il prossimo passo.';
+    $('work-grid').dataset.mode = state.busy ? 'busy' : hasTechnicalCase ? 'report' : hasReport ? state.editing ? 'edit-report' : 'report' : 'input';
+    $('input-panel').hidden = state.busy || hasTechnicalCase || (hasReport && !state.editing);
     $('input-panel').className = 'panel input-panel' + (state.file ? ' has-photo' : '');
     $('return-report').hidden = !hasReport || !state.editing;
     $('upload-title').textContent = state.file ? 'Vuoi cambiare file?' : 'Carica foto o video';
     $('submit-note').textContent = hasReport ? 'Il rapporto corrente cambia solo dopo una nuova analisi riuscita.' : 'Controlla foto e contesto prima di avviare.';
-    const activeStep = state.busy || (hasReport && !state.editing) ? 2 : state.file ? 1 : 0;
+    const activeStep = state.busy || hasTechnicalCase || (hasReport && !state.editing) ? 2 : state.file ? 1 : 0;
     ['step-photo', 'step-context', 'step-result'].forEach((id, index) => {
       $(id).className = 'workflow-step' + (index < activeStep ? ' complete' : index === activeStep ? ' current' : '');
       $(id).removeAttribute('aria-current'); if (index === activeStep) $(id).setAttribute('aria-current', 'step');
     });
-    $('result-step-note').textContent = state.busy ? 'Analisi in corso' : hasReport ? 'Rapporto disponibile' : 'Azioni e chiarimenti';
+    $('result-step-note').textContent = state.busy ? 'Elaborazione in corso' : hasTechnicalCase ? 'Verifica disponibile' : hasReport ? 'Rapporto disponibile' : 'Azioni e chiarimenti';
     const needsArchivedPhoto = Boolean(state.analysis && !state.file);
     $('questions-photo-note').hidden = !needsArchivedPhoto;
     $('questions').querySelectorAll('textarea').forEach(input => { input.disabled = state.busy || needsArchivedPhoto; });
@@ -39,9 +39,9 @@
     if (state.busy || state.caseBusy) return;
     if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
     if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl);
-    state.file = null; state.mediaKind = null; state.imageUrl = null; state.mediaUrl = null; state.videoInspection = null; $('photo').value = ''; $('context').value = '';
+    state.file = null; state.mediaKind = null; state.imageUrl = null; state.mediaUrl = null; state.videoInspection = null; state.technicalArchiveOpen = false; $('photo').value = ''; $('context').value = '';
     $('preview-wrap').hidden = true; $('preview').removeAttribute('src'); $('file-name').textContent = '';
-    $('video-preview').removeAttribute('src'); $('video-evidence').hidden = true; $('video-frames').replaceChildren();
+    $('video-preview').removeAttribute('src'); $('archived-video').removeAttribute('src'); $('archived-video').hidden = true; $('video-archive-note').hidden = true; $('video-evidence').hidden = true; $('video-frames').replaceChildren();
     $('media-note').hidden = true; $('media-note').textContent = '';
     clearAnalysis(); notice(''); showView('analysis', true);
   }
@@ -116,13 +116,14 @@
     $('busy-description').textContent = video ? 'Sto controllando durata, fotogrammi e presenza della traccia audio.' : 'Sto esaminando la situazione per proporre osservazioni, azioni e chiarimenti.';
     $('analyse-button').textContent = value ? (state.mediaKind === 'video' ? 'Verifica in corso…' : 'Analisi in corso…') : (state.mediaKind === 'video' ? 'Verifica video e audio →' : 'Avvia analisi AI →');
     $('reanalyse-button').textContent = value ? 'Analisi in corso…' : state.analysis && !state.file ? 'Aggiungi la foto per aggiornare' : 'Aggiorna con le risposte';
-    $('busy-state').hidden = !value; $('report').hidden = value || !state.analysis; $('empty-state').hidden = value || Boolean(state.analysis);
+    $('busy-state').hidden = !value; $('report').hidden = value || !state.analysis; $('empty-state').hidden = value || Boolean(state.analysis) || Boolean(state.videoInspection);
     $('result-region').setAttribute('aria-busy', String(value));
     $('result-region').setAttribute('aria-labelledby', value ? 'busy-title' : state.analysis ? 'report-title' : 'result-title');
   }
   function clearAnalysis() {
-    state.analysis = null; state.archive = null; state.openedCaseId = null; state.answers.clear(); state.submittedContext = ''; state.editing = true; clearFeedback();
+    state.analysis = null; state.archive = null; state.openedCaseId = null; state.videoInspection = null; state.technicalArchiveOpen = false; state.answers.clear(); state.submittedContext = ''; state.editing = true; clearFeedback();
     $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren();
+    $('video-evidence').hidden = true; $('video-frames').replaceChildren(); $('archived-video').hidden = true; $('archived-video').removeAttribute('src'); $('video-archive-note').hidden = true;
     $('case-summary').replaceChildren(); $('question-summary').replaceChildren(); $('question-summary').hidden = true;
     $('report-notice').hidden = true; $('report-title').textContent = 'Analisi completata';
     $('analysis-announcement').textContent = '';
@@ -164,15 +165,17 @@
   function renderCaseList(cases) {
     $('history-list').replaceChildren(); $('history-empty').hidden = cases.length !== 0;
     cases.forEach(item => {
+      const technicalVideo = item.kind === 'video_technical_verification';
       const card = make('article', null, 'history-item'); card.dataset.caseId = item.id;
-      const body = make('div', null, 'history-item-body'); body.append(make('h3', caseExcerpt(item.summary, 'Analisi senza sintesi')));
+      const body = make('div', null, 'history-item-body'); body.append(make('h3', caseExcerpt(item.summary, technicalVideo ? 'Verifica tecnica video' : 'Analisi senza sintesi')));
       body.append(make('p', caseDate(item.created_at), 'history-date'));
+      if (technicalVideo) body.append(make('p', 'Video · verifica tecnica, senza analisi dei rischi AI', 'history-context'));
       if (item.deletion_pending) body.append(make('p', 'Il caso non è consultabile. Riprova per completare la rimozione dei file dal server.', 'notice warning'));
       if (item.context) body.append(make('p', caseExcerpt(item.context), 'history-context'));
       const actions = make('div', null, 'history-actions');
       if (!item.deletion_pending) {
-        const open = make('button', 'Apri analisi', 'button subtle'); open.type = 'button';
-        open.addEventListener('click', () => openCase(item.id, open)); actions.append(open);
+        const open = make('button', technicalVideo ? 'Apri verifica' : 'Apri analisi', 'button subtle'); open.type = 'button';
+        open.addEventListener('click', () => openCase(item.id, open, technicalVideo)); actions.append(open);
       }
       const remove = make('button', item.deletion_pending ? 'Riprova eliminazione' : 'Elimina', 'button danger'); remove.type = 'button';
       remove.addEventListener('click', () => askDeleteCase(item.id, actions, remove));
@@ -188,7 +191,7 @@
       const cases = Array.isArray(data.cases) ? data.cases : [];
       renderCaseList(cases); state.historyLoaded = true;
       const storageNote = data.storage?.uploads_blocked ? ' Spazio esaurito: lo storico resta consultabile, ma i nuovi file non possono essere salvati.' : data.storage?.warning ? ' Lo spazio dello storico è quasi esaurito.' : '';
-      $('history-status').textContent = (cases.length ? cases.length + ' analisi salvate disponibili.' : 'Nessuna analisi salvata.') + storageNote;
+      $('history-status').textContent = (cases.length ? cases.length + ' casi salvati disponibili.' : 'Nessun caso salvato.') + storageNote;
       if (focus) { showView('history'); focusFeedback(cases.length ? 'history-title' : 'history-empty'); }
     } catch (err) {
       if (err.status === 401) { await archiveSessionExpired(); return; }
@@ -196,16 +199,41 @@
       $('history-status').textContent = 'Impossibile caricare l’archivio.'; if (focus) { showView('history'); focusFeedback('history-error'); }
     } finally { $('history-loading').hidden = true; setHistoryBusy(false); }
   }
-  async function openCase(caseId, trigger) {
+  function openTechnicalVideoCase(saved) {
+    const inspection = saved?.analysis?.meta?.video_inspection;
+    if (!inspection || !Number.isFinite(inspection.duration_seconds) || !Array.isArray(inspection.frames) || !inspection.audio) throw new Error('La verifica video salvata è incompleta.');
+    const assets = Array.isArray(saved.assets) ? saved.assets : [];
+    const original = assets.find(asset => asset?.role === 'original' && String(asset.media_type || '').startsWith('video/') && asset.download_url);
+    const frameAssets = assets.filter(asset => asset?.role === 'frame' && String(asset.media_type || '').startsWith('image/') && asset.download_url).sort((a, b) => String(a.filename).localeCompare(String(b.filename)));
+    if (frameAssets.length !== inspection.frames.length) throw new Error('I fotogrammi conservati non corrispondono alla verifica salvata.');
+    const restored = {
+      ...inspection,
+      frames: inspection.frames.map((frame, index) => ({ timestamp_seconds: frame.timestamp_seconds, image_data_url: frameAssets[index].download_url })),
+    };
+    if (state.imageUrl && state.imageUrl.startsWith('blob:')) URL.revokeObjectURL(state.imageUrl);
+    if (state.mediaUrl && state.mediaUrl.startsWith('blob:')) URL.revokeObjectURL(state.mediaUrl);
+    state.imageUrl = null; state.mediaUrl = original ? original.download_url : null; state.file = null; state.mediaKind = 'video'; state.analysis = null; state.videoInspection = restored; state.technicalArchiveOpen = true; state.archive = { saved: true, case_id: saved.id, kind: 'video_technical_verification' }; state.openedCaseId = saved.id; state.editing = false; state.answers.clear(); state.submittedContext = saved.context || '';
+    $('photo').value = ''; $('context').value = saved.context || ''; $('preview-wrap').hidden = true; $('report').hidden = true; $('empty-state').hidden = true;
+    $('archived-video').hidden = !original; if (original) $('archived-video').src = original.download_url; else $('archived-video').removeAttribute('src');
+    $('video-archive-note').textContent = original
+      ? restored.audio.status === 'absent'
+        ? 'Il video originale è conservato in questo caso protetto. Il file non contiene una traccia audio.'
+        : 'Il video originale è conservato in questo caso protetto. La traccia audio presente nel contenitore è stata mantenuta; stato e qualità restano indicati qui sotto.'
+      : 'Il video originale non è disponibile in questo caso; usa i fotogrammi soltanto come evidenza parziale.';
+    $('video-archive-note').hidden = false; renderVideoInspection(restored); showView('analysis');
+    $('result-region').setAttribute('aria-labelledby', 'video-evidence-title'); $('history-status').textContent = 'Verifica tecnica video aperta.'; updateButton(); focusFeedback('video-evidence-title');
+  }
+  async function openCase(caseId, trigger, technicalHint = false) {
     if (state.historyBusy || state.busy) return;
-    $('history-error').hidden = true; setHistoryBusy(true, 'Apertura dell’analisi salvata.', true); trigger.textContent = 'Apertura…';
+    $('history-error').hidden = true; setHistoryBusy(true, technicalHint ? 'Apertura della verifica tecnica salvata.' : 'Apertura dell’analisi salvata.', true); trigger.textContent = 'Apertura…';
     try {
       const data = await api('/api/cases/' + encodeURIComponent(caseId), { headers: { 'X-CSRF-Token': state.csrf } });
       const saved = data.case;
       if (!saved?.analysis || !Array.isArray(saved.analysis.findings)) throw new Error('Il caso salvato è incompleto.');
+      if (saved.analysis.meta?.case_kind === 'video_technical_verification') { openTechnicalVideoCase(saved); return; }
       const previousImageUrl = state.imageUrl, previousFile = state.file, previousAnswers = new Map(state.answers);
       const original = Array.isArray(saved.assets) ? saved.assets.find(asset => asset?.role === 'original' && String(asset.media_type || '').startsWith('image/') && asset.download_url) : null;
-      state.imageUrl = original ? original.download_url : null; state.file = null; state.answers.clear();
+      state.imageUrl = original ? original.download_url : null; state.file = null; state.answers.clear(); state.videoInspection = null; state.technicalArchiveOpen = false; $('video-evidence').hidden = true; $('archived-video').hidden = true; $('archived-video').removeAttribute('src'); $('video-archive-note').hidden = true;
       if (state.imageUrl) { $('preview').src = state.imageUrl; $('preview').hidden = false; }
       try { await renderAnalysis(saved.analysis, saved.context || '', { archived: true }); }
       catch (err) { state.imageUrl = previousImageUrl; state.file = previousFile; state.answers = previousAnswers; if (previousImageUrl) $('preview').src = previousImageUrl; else $('preview').removeAttribute('src'); throw err; }
@@ -219,12 +247,12 @@
     } catch (err) {
       if (err.status === 401) { await archiveSessionExpired(); return; }
       $('history-error').textContent = 'Impossibile aprire l’analisi. ' + err.message; $('history-error').hidden = false; $('history-status').textContent = 'Apertura non riuscita.'; showView('history'); focusFeedback('history-error');
-    } finally { trigger.textContent = 'Apri analisi'; setHistoryBusy(false); }
+    } finally { trigger.textContent = technicalHint ? 'Apri verifica' : 'Apri analisi'; setHistoryBusy(false); }
   }
   function askDeleteCase(caseId, actions, trigger) {
     if (state.historyBusy || actions.querySelector('.delete-confirm')) return;
     const confirm = make('div', null, 'delete-confirm'); confirm.setAttribute('role', 'group'); confirm.setAttribute('aria-label', 'Conferma eliminazione');
-    confirm.append(make('p', 'Eliminare definitivamente questa analisi?'));
+    confirm.append(make('p', 'Eliminare definitivamente questo caso e i file conservati?'));
     const yes = make('button', 'Conferma eliminazione', 'button danger'); yes.type = 'button';
     const no = make('button', 'Annulla', 'button subtle'); no.type = 'button';
     yes.addEventListener('click', () => deleteCase(caseId, yes));
@@ -233,14 +261,14 @@
   }
   async function deleteCase(caseId, trigger) {
     if (state.historyBusy) return;
-    setHistoryBusy(true, 'Eliminazione dell’analisi salvata.', true); trigger.textContent = 'Eliminazione…';
+    setHistoryBusy(true, 'Eliminazione del caso salvato.', true); trigger.textContent = 'Eliminazione…';
     try {
       await api('/api/cases/' + encodeURIComponent(caseId), { method: 'DELETE', headers: { 'X-CSRF-Token': state.csrf } });
       if (state.openedCaseId === caseId) clearAnalysis();
-      setHistoryBusy(false); await loadCases(); $('history-status').textContent = 'Analisi eliminata definitivamente.'; showView('history'); focusFeedback('history-title');
+      setHistoryBusy(false); await loadCases(); $('history-status').textContent = 'Caso eliminato definitivamente.'; showView('history'); focusFeedback('history-title');
     } catch (err) {
       if (err.status === 401) { await archiveSessionExpired(); return; }
-      $('history-error').textContent = 'Impossibile eliminare l’analisi. ' + err.message; $('history-error').hidden = false; $('history-status').textContent = 'Eliminazione non riuscita.'; showView('history'); focusFeedback('history-error');
+      $('history-error').textContent = 'Impossibile eliminare il caso. ' + err.message; $('history-error').hidden = false; $('history-status').textContent = 'Eliminazione non riuscita.'; showView('history'); focusFeedback('history-error');
     } finally { trigger.textContent = 'Conferma eliminazione'; setHistoryBusy(false); }
   }
   $('refresh-history').addEventListener('click', () => loadCases({ focus: true }));
@@ -269,7 +297,7 @@
     const attachingArchivedPhoto = Boolean(state.analysis && !state.file);
     if (attachingArchivedPhoto) { clearFeedback(); state.editing = true; } else clearAnalysis();
     notice('');
-    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl); state.imageUrl = null; state.mediaUrl = null; state.file = null; state.mediaKind = null; state.videoInspection = null; $('preview-wrap').hidden = true; $('preview').hidden = false; $('video-preview').hidden = true; $('video-preview').removeAttribute('src'); $('video-evidence').hidden = true; $('video-frames').replaceChildren(); $('media-note').hidden = true;
+    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl); state.imageUrl = null; state.mediaUrl = null; state.file = null; state.mediaKind = null; state.videoInspection = null; state.technicalArchiveOpen = false; $('preview-wrap').hidden = true; $('preview').hidden = false; $('video-preview').hidden = true; $('video-preview').removeAttribute('src'); $('archived-video').hidden = true; $('archived-video').removeAttribute('src'); $('video-archive-note').hidden = true; $('video-evidence').hidden = true; $('video-frames').replaceChildren(); $('media-note').hidden = true;
     syncWorkspace();
     const file = $('photo').files[0]; if (!file) return;
     const images = ['image/jpeg', 'image/png', 'image/webp'], videos = ['video/mp4', 'video/webm', 'video/quicktime'];
@@ -346,11 +374,12 @@
     }
   }
   function renderVideoInspection(media) {
-    $('video-summary').textContent = 'Durata verificata: ' + media.duration_seconds.toFixed(1) + ' s · ' + media.frames.length + ' fotogrammi campionati.';
+    $('video-summary').textContent = 'Durata verificata: ' + Number(media.duration_seconds).toFixed(1) + ' s · ' + media.frames.length + ' fotogrammi campionati.';
     $('video-frames').replaceChildren();
     media.frames.forEach(frame => {
-      const figure = make('figure', null, 'video-frame'); const image = make('img'); image.src = frame.image_data_url; image.alt = 'Fotogramma a ' + frame.timestamp_seconds.toFixed(1) + ' secondi';
-      figure.append(image, make('figcaption', frame.timestamp_seconds.toFixed(1) + ' s')); $('video-frames').append(figure);
+      const timestamp = Number(frame.timestamp_seconds);
+      const figure = make('figure', null, 'video-frame'); const image = make('img'); image.src = frame.image_data_url; image.alt = 'Fotogramma a ' + timestamp.toFixed(1) + ' secondi';
+      figure.append(image, make('figcaption', timestamp.toFixed(1) + ' s')); $('video-frames').append(figure);
     });
     const labels = { absent: 'Nessuna traccia audio presente.', silent: 'Traccia audio digitale priva di segnale.', low_level: 'Traccia audio con segnale molto debole: deve ancora essere trascritta e verificata.', ready_for_transcription: 'Traccia audio estratta: la trascrizione e la comprensibilità non sono ancora state verificate.', error: 'Traccia audio presente, ma estrazione non riuscita: la verifica resta incompleta.' };
     $('audio-summary').textContent = labels[media.audio.status] || 'Stato audio non determinato.';
@@ -359,13 +388,16 @@
   async function inspectVideo(origin) {
     if (!state.media.video_intake_enabled) { focusFeedback(analysisError('La verifica locale dei video non è disponibile.', origin)); return; }
     setBusy(true); state.controller = new AbortController(); $('analysis-announcement').textContent = 'Verifica tecnica di video e audio in corso.';
-    const form = new FormData(); form.append('file', state.file);
+    const form = new FormData(); form.append('file', state.file); form.append('context', composedContext());
     try {
       const data = await api('/api/media/inspect', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
-      state.videoInspection = data.media; renderVideoInspection(data.media);
+      state.videoInspection = data.media; state.technicalArchiveOpen = false; state.archive = data.archive || null; state.openedCaseId = data.archive?.case_id || null; $('archived-video').hidden = true; $('archived-video').removeAttribute('src'); $('video-archive-note').hidden = true; renderVideoInspection(data.media); $('empty-state').hidden = true;
       const incomplete = data.media.audio.status === 'error' ? ' Attenzione: la parte audio non è stata verificata.' : '';
-      $('media-note').textContent = data.message + incomplete + ' La prova gratuita non è stata consumata.';
+      const archived = data.archive?.saved ? ' Video ed evidenze sono stati salvati nello storico protetto.' : data.archive?.message ? ' ' + data.archive.message : '';
+      $('media-note').textContent = data.message + incomplete + ' La prova gratuita non è stata consumata.' + archived;
+      $('media-note').hidden = false;
       $('analysis-announcement').textContent = 'Verifica tecnica del video completata.';
+      if (data.archive?.saved) loadCases();
     } catch (err) {
       if (err.status === 401) {
         analysisError('Sessione scaduta. Il video non è stato verificato.', origin);

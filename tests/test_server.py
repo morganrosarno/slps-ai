@@ -63,13 +63,19 @@ def inspect_media(client, token, raw, filename="clip.mp4", mime="video/mp4"):
     }, headers={"X-CSRF-Token": token})
 
 
-def short_video(tmp_path):
-    target = tmp_path / "video.mp4"
-    subprocess.run([
-        "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.8",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.8", "-shortest", "-c:v", "libx264",
-        "-pix_fmt", "yuv420p", "-c:a", "aac", str(target),
-    ], check=True)
+def short_video(tmp_path, *, with_audio=True):
+    target = tmp_path / ("video-audio.mp4" if with_audio else "video-no-audio.mp4")
+    command = [
+        "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+        "color=c=blue:s=160x90:d=0.8",
+    ]
+    if with_audio:
+        command += ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.8", "-shortest"]
+    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    if with_audio:
+        command += ["-c:a", "aac"]
+    command += [str(target)]
+    subprocess.run(command, check=True)
     return target.read_bytes()
 
 
@@ -457,13 +463,109 @@ def test_video_intake_validates_frames_and_audio_without_provider_or_trial(tmp_p
     client = app.test_client()
     token = login(client, "trial-password-16-chars").json["csrf"]
     monkeypatch.setattr(server, "analizza_immagine", lambda *_args: pytest.fail("Provider called"))
-    response = inspect_media(client, token, short_video(tmp_path))
+    raw = short_video(tmp_path)
+    response = inspect_media(client, token, raw)
     assert response.status_code == 200
     assert response.json["media"]["validated"] is True
     assert response.json["media"]["audio"]["status"] == "ready_for_transcription"
     assert response.json["media"]["transcription"]["status"] == "not_performed"
+    assert response.json["media"]["original_retention"]["status"] == "archived"
+    assert response.json["archive"]["saved"] is True
+    assert response.json["archive"]["kind"] == "video_technical_verification"
     assert response.json["trial_consumed"] is False
     assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1
+
+    case_id = response.json["archive"]["case_id"]
+    listing = client.get("/api/cases", headers={"X-CSRF-Token": token}).json["cases"]
+    assert listing[0]["id"] == case_id
+    assert listing[0]["kind"] == "video_technical_verification"
+    saved = client.get(f"/api/cases/{case_id}", headers={"X-CSRF-Token": token}).json["case"]
+    assert saved["analysis"]["meta"]["analysis_performed"] is False
+    assert saved["analysis"]["meta"]["transcription_performed"] is False
+    assert saved["analysis"]["findings"] == []
+    roles = [asset["role"] for asset in saved["assets"]]
+    assert roles.count("original") == 1
+    assert roles.count("frame") == len(response.json["media"]["frames"])
+    assert roles.count("audio") == 1
+    original = next(asset for asset in saved["assets"] if asset["role"] == "original")
+    original_response = client.get(original["download_url"])
+    assert original_response.status_code == 200
+    assert original_response.data == raw
+    assert original_response.headers["Content-Disposition"].startswith("inline;")
+
+
+def test_video_history_quota_failure_keeps_existing_case_and_trial(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    app.extensions["case_store"].max_history_bytes = 64
+    store = app.extensions["case_store"]
+    existing, failure = store.create(
+        "trial-tenant", "trial-owner", "existing",
+        {"summary": "Existing", "findings": []}, None, 100,
+        assets=[{"role": "original", "data": b"keep", "filename": "keep.bin", "media_type": "application/octet-stream"}],
+    )
+    assert existing and failure is None
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    response = inspect_media(client, token, short_video(tmp_path))
+    assert response.status_code == 200
+    assert response.json["media"]["validated"] is True
+    assert response.json["media"]["original_retention"]["status"] == "not_saved"
+    assert response.json["archive"]["saved"] is False
+    assert "casi esistenti restano disponibili" in response.json["archive"]["message"]
+    assert store.get(existing, "trial-tenant", "trial-owner") is not None
+    assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1
+
+
+def test_archived_video_without_audio_never_claims_an_audio_track(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    response = inspect_media(client, token, short_video(tmp_path, with_audio=False))
+    assert response.status_code == 200
+    assert response.json["archive"]["saved"] is True
+    assert response.json["media"]["audio"]["status"] == "absent"
+    message = response.json["media"]["original_retention"]["message"]
+    assert "non contiene una traccia audio" in message
+    assert "traccia audio incorporata" not in message
+    saved = client.get(
+        f"/api/cases/{response.json['archive']['case_id']}",
+        headers={"X-CSRF-Token": token},
+    ).json["case"]
+    assert "audio" not in {asset["role"] for asset in saved["assets"]}
+
+
+def test_video_history_is_owner_private_and_survives_verified_backup(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    owner = app.test_client()
+    token = login(owner, "trial-password-16-chars").json["csrf"]
+    raw = short_video(tmp_path)
+    created = inspect_media(owner, token, raw)
+    case_id = created.json["archive"]["case_id"]
+    saved = owner.get(f"/api/cases/{case_id}", headers={"X-CSRF-Token": token}).json["case"]
+    original = next(asset for asset in saved["assets"] if asset["role"] == "original")
+
+    other_app = server.create_app({
+        **dict(app.config), "PILOT_TENANT_ID": "other-company", "PILOT_OWNER_ID": "other-owner",
+    })
+    other = other_app.test_client()
+    other_token = login(other, "trial-password-16-chars").json["csrf"]
+    assert other.get(f"/api/cases/{case_id}", headers={"X-CSRF-Token": other_token}).status_code == 404
+    assert other.get(original["download_url"]).status_code == 404
+
+    backup = tmp_path / "video-backup"
+    manifest = app.extensions["case_store"].backup(backup)
+    restored = server.CaseStore.restore(
+        backup, tmp_path / "restored" / "cases.sqlite3",
+        tmp_path / "restored" / "media", 1024 * 1024 * 1024,
+    )
+    restored_case = restored.get(case_id, "trial-tenant", "trial-owner")
+    assert restored_case["analysis"]["meta"]["case_kind"] == "video_technical_verification"
+    restored_original = next(asset for asset in restored_case["assets"] if asset["role"] == "original")
+    assert restored.asset(case_id, restored_original["id"], "trial-tenant", "trial-owner")["path"].read_bytes() == raw
+    assert len(manifest["files"]) == len(saved["assets"])
+
+    assert owner.delete(f"/api/cases/{case_id}", headers={"X-CSRF-Token": token}).json == {"deleted": True}
+    assert owner.get(f"/api/cases/{case_id}", headers={"X-CSRF-Token": token}).status_code == 404
 
 
 def test_video_intake_refuses_parallel_decoder_job(client):

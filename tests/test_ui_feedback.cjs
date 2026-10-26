@@ -116,10 +116,63 @@ test('video intake verifies frames and audio without claiming AI analysis', asyn
   assert.equal(f.$('analyse-button').disabled, false);
   await f.submit();
   assert.equal(f.requests.length, 1);
-  await f.finishRequest('/api/media/inspect', { message: 'Video e audio verificati localmente.', media: { duration_seconds: 1.2, frames: [{ timestamp_seconds: 0.4, image_data_url: 'data:image/jpeg;base64,AA==' }], audio: { status: 'ready_for_transcription' } }, trial_consumed: false });
+  await f.finishRequest('/api/media/inspect', { message: 'Video e audio verificati localmente.', media: { duration_seconds: 1.2, frames: [{ timestamp_seconds: 0.4, image_data_url: 'data:image/jpeg;base64,AA==' }], audio: { status: 'ready_for_transcription' } }, archive: { saved: true, case_id: 'video-case' }, trial_consumed: false });
   assert.equal(f.$('video-evidence').hidden, false);
   assert.match(f.$('audio-summary').textContent, /non sono ancora state verificate/);
-  assert.match(f.$('media-note').textContent, /non è stata consumata/);
+  assert.match(f.$('media-note').textContent, /non è stata consumata.*salvati nello storico protetto/);
+  assert.equal(f.$('empty-state').hidden, true);
+});
+
+test('saved technical video reopens with protected evidence and no AI-risk claim', async () => {
+  const saved = { id: 'video-case', created_at: 1792920000, summary: 'Verifica tecnica di video e audio', context: 'Area di carico', kind: 'video_technical_verification' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  const card = f.$('history-list').childNodes[0], open = card.querySelectorAll('button')[0];
+  assert.equal(open.textContent, 'Apri verifica');
+  assert.match(card.textContent, /senza analisi dei rischi AI/);
+  open.click(); await tick();
+  await f.finishRequest('/api/cases/video-case', { case: {
+    ...saved,
+    analysis: { summary: saved.summary, findings: [], meta: { case_kind: 'video_technical_verification', analysis_performed: false, video_inspection: { duration_seconds: 1.2, frames: [{ timestamp_seconds: 0.4 }], audio: { status: 'ready_for_transcription' } } } },
+    assets: [
+      { id: 'video-1', role: 'original', filename: 'scene.mp4', media_type: 'video/mp4', download_url: '/api/cases/video-case/assets/video-1' },
+      { id: 'frame-1', role: 'frame', filename: 'frame-01-0.400s.jpg', media_type: 'image/jpeg', download_url: '/api/cases/video-case/assets/frame-1' },
+    ],
+  } });
+  assert.equal(f.$('video-evidence').hidden, false);
+  assert.equal(f.$('archived-video').src, '/api/cases/video-case/assets/video-1');
+  assert.equal(f.$('video-frames').querySelector('img').src, '/api/cases/video-case/assets/frame-1');
+  assert.match(template, /Non è stata eseguita un’analisi dei rischi con l’AI/);
+  assert.match(f.$('video-archive-note').textContent, /caso protetto.*traccia audio presente.*mantenuta/);
+  assert.equal(f.$('report').hidden, true); assert.equal(f.$('input-panel').hidden, true);
+  assert.equal(f.doc.activeElement.id, 'video-evidence-title');
+});
+
+test('saved video without audio states that no audio track exists', async () => {
+  const saved = { id: 'silent-container', created_at: 1792920000, summary: 'Verifica tecnica di video e audio', context: '', kind: 'video_technical_verification' };
+  const f = await fixture({ initialCases: [saved] }); await tick();
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/silent-container', { case: {
+    ...saved,
+    analysis: { summary: saved.summary, findings: [], meta: { case_kind: 'video_technical_verification', analysis_performed: false, video_inspection: { duration_seconds: 1, frames: [], audio: { status: 'absent' } } } },
+    assets: [{ id: 'video-1', role: 'original', filename: 'scene.mp4', media_type: 'video/mp4', download_url: '/api/cases/silent-container/assets/video-1' }],
+  } });
+  assert.match(f.$('video-archive-note').textContent, /non contiene una traccia audio/);
+  assert.doesNotMatch(f.$('video-archive-note').textContent, /audio incorporata/);
+  assert.match(f.$('audio-summary').textContent, /Nessuna traccia audio/);
+});
+
+test('video archive quota failure keeps the completed technical evidence visible', async () => {
+  const f = await fixture({ sessionData: { media: { video_max_bytes: 52428800, video_intake_enabled: true } } });
+  f.video(); await f.submit();
+  await f.finishRequest('/api/media/inspect', {
+    message: 'Video e audio verificati localmente.',
+    media: { duration_seconds: 2, frames: [{ timestamp_seconds: 1, image_data_url: 'data:image/jpeg;base64,AA==' }], audio: { status: 'absent' } },
+    archive: { saved: false, case_id: null, message: 'Spazio archivio esaurito: i casi esistenti restano disponibili.' },
+    trial_consumed: false,
+  });
+  assert.equal(f.$('video-evidence').hidden, false);
+  assert.equal(f.$('empty-state').hidden, true);
+  assert.match(f.$('media-note').textContent, /prova gratuita non è stata consumata.*Spazio archivio esaurito/);
 });
 
 test('trial result remains readable while print and export are unavailable', async () => {
@@ -313,10 +366,10 @@ test('authenticated case history exposes loading, empty and readable saved-case 
   assert.equal(f.$('history-list').childNodes.length, 2);
   assert.match(f.$('history-list').childNodes[0].textContent, /Passaggio da proteggere.*Area logistica/);
   assert.match(f.$('history-list').childNodes[1].textContent, /Analisi senza sintesi/);
-  assert.match(f.$('history-status').textContent, /2 analisi salvate/);
+  assert.match(f.$('history-status').textContent, /2 casi salvati/);
 
   const empty = await fixture(); await tick();
-  assert.equal(empty.$('history-empty').hidden, false); assert.match(empty.$('history-status').textContent, /Nessuna analisi/);
+  assert.equal(empty.$('history-empty').hidden, false); assert.match(empty.$('history-status').textContent, /Nessun caso/);
   empty.$('refresh-history').click(); await tick(); assert.equal(empty.doc.activeElement.id, 'history-empty');
 });
 
@@ -452,7 +505,7 @@ test('deleting a saved case requires inline confirmation and clears an opened re
   assert.equal(f.doc.activeElement, yes); yes.click(); await tick();
   assert.equal(f.requests[0].options.method, 'DELETE');
   await f.finishRequest('/api/cases/delete-me', { deleted: true });
-  assert.equal(f.$('history-empty').hidden, false); assert.match(f.$('history-status').textContent, /eliminata definitivamente/);
+  assert.equal(f.$('history-empty').hidden, false); assert.match(f.$('history-status').textContent, /eliminato definitivamente/);
   assert.equal(f.$('report').hidden, true); assert.equal(f.$('empty-state').hidden, false); assert.equal(f.doc.activeElement.id, 'history-title');
 });
 

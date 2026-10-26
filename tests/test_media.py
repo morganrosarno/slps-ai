@@ -46,6 +46,20 @@ def test_extracts_adaptive_frames_and_audible_audio(tmp_path):
     assert list(temp_root.iterdir()) == []
 
 
+def test_private_artifacts_are_returned_only_when_requested(tmp_path):
+    raw = clip(tmp_path)
+    public = inspect_video(raw, expected_mime="video/mp4", max_bytes=5_000_000, max_seconds=30)
+    assert "_artifacts" not in public
+    private = inspect_video(
+        raw, expected_mime="video/mp4", max_bytes=5_000_000,
+        max_seconds=30, include_artifacts=True,
+    )
+    assert len(private["_artifacts"]["frames"]) == len(private["frames"])
+    assert all(frame["data"].startswith(b"\xff\xd8") for frame in private["_artifacts"]["frames"])
+    assert private["_artifacts"]["audio"]["media_type"] == "audio/wav"
+    assert private["_artifacts"]["audio"]["data"].startswith(b"RIFF")
+
+
 def test_distinguishes_absent_and_silent_audio(tmp_path):
     absent = inspect_video(clip(tmp_path, audio=None, extension="webm"), expected_mime="video/webm", max_bytes=5_000_000, max_seconds=30)
     assert absent["audio"]["status"] == "absent"

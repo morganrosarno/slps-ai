@@ -466,11 +466,13 @@ class CaseStore:
                 })
                 continue
             analysis = json.loads(row["analysis_json"])
+            meta = analysis.get("meta", {}) if isinstance(analysis, dict) else {}
             cases.append({
                 "id": row["id"],
                 "created_at": row["created"],
                 "context": row["context"],
                 "summary": analysis.get("summary", "") if isinstance(analysis, dict) else "",
+                "kind": meta.get("case_kind", "risk_analysis") if isinstance(meta, dict) else "risk_analysis",
             })
         return cases
 
@@ -1134,9 +1136,10 @@ def create_app(test_config=None):
         )
         if not asset:
             return error("asset_not_found", "File del caso non disponibile.", 404)
+        inline = asset["media_type"].startswith(("image/", "video/", "audio/"))
         return send_file(
             asset["path"], mimetype=asset["media_type"],
-            as_attachment=asset["media_type"] not in set(IMAGE_MEDIA.values()),
+            as_attachment=not inline,
             download_name=asset["filename"], conditional=False, max_age=0,
         )
 
@@ -1179,6 +1182,9 @@ def create_app(test_config=None):
                 return error("invalid_media", "Tipo MIME ed estensione non corrispondono. Usa MP4, WebM o MOV.", 400)
             if request.content_length and request.content_length > app.config["MAX_VIDEO_BYTES"] + 128 * 1024:
                 return error("file_too_large", "Il video supera il limite configurato.", 413)
+            context = request.form.get("context", "")
+            if len(context) > MAX_CONTEXT_CHARS:
+                return error("invalid_context", "Il contesto deve contenere al massimo 8000 caratteri.", 400)
             raw = upload.stream.read(app.config["MAX_VIDEO_BYTES"] + 1)
             if time.monotonic() - media_started > 20:
                 return error("media_processing_timeout", "Il caricamento ha superato il tempo consentito. Riprova con un file più piccolo o una connessione stabile.", 422)
@@ -1188,14 +1194,109 @@ def create_app(test_config=None):
                     expected_mime=declared_mime,
                     max_bytes=app.config["MAX_VIDEO_BYTES"],
                     max_seconds=app.config["MAX_VIDEO_SECONDS"],
+                    include_artifacts=True,
                 )
             except MediaError as exc:
                 return error(exc.code, str(exc), exc.status)
         finally:
             store.release_media(media_token)
+        artifacts = media.pop("_artifacts", {"frames": [], "audio": None})
+        frame_metadata = [
+            {"timestamp_seconds": frame["timestamp_seconds"]}
+            for frame in media["frames"]
+        ]
+        technical_record = {
+            "summary": "Verifica tecnica di video e audio",
+            "findings": [],
+            "questions": [],
+            "sources": [],
+            "needs_clarification": False,
+            "meta": {
+                "case_kind": "video_technical_verification",
+                "analysis_performed": False,
+                "transcription_performed": media["transcription"]["status"] == "available",
+                "video_inspection": {
+                    "validated": media["validated"],
+                    "mime_type": media["mime_type"],
+                    "duration_seconds": media["duration_seconds"],
+                    "video": media["video"],
+                    "frames": frame_metadata,
+                    "sampling": media["sampling"],
+                    "audio": media["audio"],
+                    "transcription": media["transcription"],
+                },
+            },
+        }
+        history_assets = [{
+            "role": "original", "data": raw,
+            "filename": upload.filename, "media_type": declared_mime,
+        }]
+        for index, frame in enumerate(artifacts.get("frames") or [], start=1):
+            history_assets.append({
+                "role": "frame", "data": frame["data"],
+                "filename": f"frame-{index:02d}-{frame['timestamp_seconds']:.3f}s.jpg",
+                "media_type": frame["media_type"],
+            })
+        audio_artifact = artifacts.get("audio")
+        if audio_artifact:
+            history_assets.append({
+                "role": "audio", "data": audio_artifact["data"],
+                "filename": "audio-extract.wav", "media_type": audio_artifact["media_type"],
+            })
+        transcript = media.get("transcription") or {}
+        if transcript.get("status") == "available" and transcript.get("text"):
+            history_assets.append({
+                "role": "transcript", "data": transcript["text"].encode("utf-8"),
+                "filename": "transcript.txt", "media_type": "text/plain",
+            })
+        try:
+            case_id, archive_failure = case_store.create(
+                session["tenant_id"], session["owner_id"], context,
+                technical_record, None, app.config["MAX_CASES_PER_OWNER"],
+                assets=history_assets,
+            )
+            archive = {
+                "saved": bool(case_id), "case_id": case_id,
+                "kind": "video_technical_verification",
+                "storage": case_store.storage_status(session["tenant_id"]),
+            }
+            if archive_failure == "limit":
+                archive["message"] = "Archivio pieno: elimina un caso prima di salvare questa verifica. La verifica tecnica resta visibile in questa pagina."
+            elif archive_failure == "storage_limit":
+                archive["message"] = "Spazio archivio esaurito: i casi esistenti restano disponibili, ma questo video e le evidenze non sono stati salvati. La verifica tecnica resta visibile in questa pagina."
+            elif archive_failure:
+                archive["message"] = "Verifica tecnica non archiviata perché il rapporto supera il limite. La verifica resta visibile in questa pagina."
+        except (sqlite3.Error, OSError, TypeError, ValueError):
+            app.logger.error("Video technical history unavailable after successful inspection")
+            archive = {
+                "saved": False, "case_id": None,
+                "kind": "video_technical_verification",
+                "message": "Verifica tecnica completata, ma video ed evidenze non sono stati archiviati per un problema temporaneo.",
+            }
+        if archive["saved"]:
+            if media["audio"]["status"] == "absent":
+                retention_message = (
+                    "Il video originale è conservato nel caso protetto. "
+                    "Il file non contiene una traccia audio."
+                )
+            else:
+                retention_message = (
+                    "Il video originale è conservato nel caso protetto e la traccia audio "
+                    "presente nel contenitore è stata mantenuta; stato e qualità restano da verificare."
+                )
+            media["original_retention"] = {
+                "status": "archived",
+                "message": retention_message,
+            }
+        else:
+            media["original_retention"] = {
+                "status": "not_saved",
+                "message": archive["message"],
+            }
         message = "Video verificato; la parte audio non ha potuto essere verificata." if media["audio"]["status"] == "error" else "Video e audio verificati localmente."
         return jsonify(
             media=media,
+            archive=archive,
             analysis_available=False,
             trial_consumed=False,
             message=message + " L’analisi AI e la trascrizione non sono ancora state eseguite.",

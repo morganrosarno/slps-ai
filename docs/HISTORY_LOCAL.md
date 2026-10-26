@@ -2,10 +2,12 @@
 
 Questa fondazione conserva ogni caso senza una scadenza automatica: rapporto e
 contesto in SQLite, originali foto/video e artefatti derivati in una cartella
-privata separata. Il master 1.8 non viene copiato nello storico. Il video con
-audio è supportato dal formato dell'archivio, ma l'endpoint di analisi video AI
-resta disattivato: la conservazione effettiva del video verrà collegata quando
-la relativa pipeline sarà disponibile e collaudata.
+privata separata. Il master 1.8 non viene copiato nello storico. La verifica
+tecnica locale del video salva il contenitore originale e mantiene la traccia
+audio incorporata quando è presente; salva inoltre i fotogrammi campionati e
+l'estratto WAV soltanto quando l'estrazione riesce. Il caso è
+marcato esplicitamente come verifica tecnica: non contiene un'analisi dei rischi
+AI e non consuma la prova gratuita. L'analisi video AI resta disattivata.
 
 ## Dati e autorizzazioni
 
@@ -65,8 +67,11 @@ file. Il manifesto deve corrispondere esattamente all'indice. Il manifesto non
 contiene credenziali. `CaseStore.restore(backup, target_db, target_media_root,
 capacity)` rifiuta destinazioni non vuote e file alterati.
 
-I test usano un video sintetico con traccia audio, un estratto audio, un
-fotogramma e una trascrizione. Questo prova il ciclo locale del codice, non la
+I test creano il caso tramite lo stesso endpoint video usato dal prodotto,
+verificano contenitore originale, presenza o assenza della traccia audio,
+eventuale estratto WAV e fotogrammi, isolamento tra account,
+quota, cancellazione e ripristino. Una prova separata include anche una
+trascrizione sintetica per il formato generico dell'archivio. Questo prova il ciclo locale del codice, non la
 durabilità, la cifratura o il ripristino del provider. Prima dello staging con
 dati reali occorre eseguire sul provider: snapshot coordinato di database e
 file, ripristino in un ambiente isolato, verifica delle impronte, apertura del

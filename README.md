@@ -29,9 +29,11 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
   assente, privo di segnale, a basso livello, pronto per una futura trascrizione o in
   errore. Non vengono ancora interpretate tracce audio multiple e il campionamento non
   equivale al rilevamento di ogni scena o evento. La verifica non chiama un
-  fornitore AI e non consuma la prova gratuita; trascrizione, comprensione audio, analisi
-  dei rischi e salvataggio del video tramite questo endpoint sono indicati chiaramente come
-  non ancora implementati; il formato dello storico è già predisposto e testato con media sintetici.
+  fornitore AI e non consuma la prova gratuita. Dopo una verifica riuscita, l'endpoint
+  archivia il contenitore originale e, quando presente, mantiene la sua traccia audio;
+  conserva inoltre i fotogrammi campionati e l'estratto WAV quando l'estrazione riesce.
+  Trascrizione, comprensione audio
+  e analisi dei rischi restano indicate chiaramente come non eseguite.
 - Storico privato dei casi: rapporto in SQLite e file originali/derivati fuori
   dal database, sempre filtrati per azienda e proprietario.
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
@@ -71,8 +73,10 @@ Questo controllo non dimostra da solo la pertinenza o correttezza legale dei tes
 ## Dati e limiti
 Il risultato strutturato e il contesto vengono archiviati in SQLite; il file
 foto originale e la copia normalizzata vengono conservati nella cartella privata
-configurata per lo storico. Il formato dell'archivio supporta anche video con
-audio e derivati, mentre la pipeline AI video resta da collegare.
+configurata per lo storico. La verifica video conserva inoltre il contenitore
+originale, la traccia audio incorporata quando presente, i fotogrammi e
+l'estratto WAV soltanto quando l'estrazione riesce; la pipeline
+AI video resta da collegare.
 L’interfaccia autenticata consente di elencare, aprire ed eliminare con conferma i propri casi;
 usa le API già filtrate per azienda e proprietario.
 Un identificativo di caso non consente da solo l'accesso: ogni operazione applica anche

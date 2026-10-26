@@ -101,7 +101,10 @@ def _audio_metrics(wav_path):
         return math.sqrt(square_sum / len(samples)), max(abs(value) for value in samples)
 
 
-def inspect_video(raw, *, expected_mime, max_bytes, max_seconds, ffprobe="ffprobe", ffmpeg="ffmpeg", temp_root=None):
+def inspect_video(
+    raw, *, expected_mime, max_bytes, max_seconds, ffprobe="ffprobe",
+    ffmpeg="ffmpeg", temp_root=None, include_artifacts=False,
+):
     if not raw:
         raise MediaError("invalid_video", "Il video è vuoto.")
     if len(raw) > max_bytes:
@@ -151,6 +154,7 @@ def inspect_video(raw, *, expected_mime, max_bytes, max_seconds, ffprobe="ffprob
             raise MediaError("invalid_video", "Il contenuto del video non corrisponde al formato dichiarato.")
 
         frames = []
+        frame_artifacts = []
         for timestamp in _timestamps(duration):
             extracted = _run([
                 ffmpeg, "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-ss", str(timestamp), "-i", str(source_path),
@@ -163,8 +167,15 @@ def inspect_video(raw, *, expected_mime, max_bytes, max_seconds, ffprobe="ffprob
                 "timestamp_seconds": timestamp,
                 "image_data_url": "data:image/jpeg;base64," + base64.b64encode(extracted.stdout).decode("ascii"),
             })
+            if include_artifacts:
+                frame_artifacts.append({
+                    "timestamp_seconds": timestamp,
+                    "data": extracted.stdout,
+                    "media_type": "image/jpeg",
+                })
 
         audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+        audio_artifact = None
         if audio_stream is None:
             audio = {"status": "absent", "codec": None, "rms": None, "peak": None}
             transcript = {"status": "not_applicable", "text": None, "language": None}
@@ -183,11 +194,16 @@ def inspect_video(raw, *, expected_mime, max_bytes, max_seconds, ffprobe="ffprob
                     status = "silent" if peak == 0 else "low_level" if rms < 100 and peak < 1000 else "ready_for_transcription"
                     audio = {"status": status, "codec": audio_stream.get("codec_name"), "rms": round(rms, 2), "peak": peak}
                     transcript = {"status": "not_applicable", "text": None, "language": None} if status == "silent" else classify_transcript()
+                    if include_artifacts:
+                        audio_artifact = {
+                            "data": wav_path.read_bytes(),
+                            "media_type": "audio/wav",
+                        }
                 except (MediaError, OSError, wave.Error):
                     audio = {"status": "error", "codec": audio_stream.get("codec_name"), "rms": None, "peak": None}
                     transcript = classify_transcript(processing_error="invalid extracted audio")
 
-        return {
+        result = {
             "validated": True,
             "mime_type": expected_mime,
             "duration_seconds": round(duration, 3),
@@ -202,3 +218,11 @@ def inspect_video(raw, *, expected_mime, max_bytes, max_seconds, ffprobe="ffprob
             "transcription": transcript,
             "original_retention": {"status": "not_implemented", "message": "Il file originale non è archiviato da questo incremento locale."},
         }
+        if include_artifacts:
+            # These bytes are private server-side evidence. The route removes
+            # this key before serializing the public response.
+            result["_artifacts"] = {
+                "frames": frame_artifacts,
+                "audio": audio_artifact,
+            }
+        return result
