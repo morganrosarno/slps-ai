@@ -53,6 +53,31 @@ Validation uses synthetic local companies/media and mocked analysis only. The
 master and model API implementation are unchanged. No paid call is needed for
 these tests.
 
+## Preflight della modalità account
+
+`python scripts/preflight.py` riconosce il profilo da `SLPS_AUTH_MODE`.
+In modalità `accounts` non richiede né usa `SLPS_PILOT_PASSWORD`,
+`SLPS_PILOT_TENANT_ID` o `SLPS_PILOT_OWNER_ID`. Restano obbligatori un segreto
+di sessione forte e la configurazione necessaria al motore di analisi.
+
+Per il collaudo account, `SLPS_ACCOUNT_DB_PATH` deve essere impostato
+esplicitamente su un percorso assoluto, esterno al codice e non temporaneo. Se
+il file esiste, il controllo lo apre in sola lettura: verifica tabelle, colonne
+necessarie alla revoca delle sessioni, permessi locali e presenza di almeno un
+utente attivo con email, azienda e rappresentanza approvate. Non crea account,
+non migra il database e non stampa percorsi, email o altri dati.
+
+La fondazione attuale non contiene un adattatore di consegna. Per questo
+`SLPS_ACCOUNT_REGISTRATION_OPEN=true` è un blocco di staging: l'interfaccia
+accetterebbe una richiesta, ma non potrebbe consegnare la verifica email o il
+recupero password. Con registrazioni chiuse, un account verificato predisposto
+in modo fidato consente il collaudo del login; l'assenza di consegna e la
+verifica umana di azienda/rappresentanza restano avvisi espliciti.
+
+Il preflight è solo locale: non prova che il volume sia davvero persistente,
+né backup/ripristino, invio email, disponibilità del modello o credito API.
+Questi punti restano cancelli separati prima dello staging aperto o del lancio.
+
 Implementation references checked on 25 October 2026:
 - https://werkzeug.palletsprojects.com/en/stable/utils/#module-werkzeug.security
 - https://flask.palletsprojects.com/en/stable/web-security/

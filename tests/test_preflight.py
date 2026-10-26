@@ -6,7 +6,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
+from accounts import AccountStore
 from scripts import preflight
 
 
@@ -44,6 +46,7 @@ class PreflightTests(unittest.TestCase):
             self.assertGreaterEqual(data["summary"]["warnings"], 1)
             self.assertEqual(data["network_calls"], 0)
             self.assertEqual(data["verification_scope"], "offline_configuration_only")
+            self.assertEqual(data["auth_profile"], "pilot")
             checks = {item["id"]: item for item in data["checks"]}
             self.assertEqual(checks["rate_path"]["status"], "pass")
             self.assertEqual(checks["rate_volume"]["status"], "warning")
@@ -110,6 +113,129 @@ class PreflightTests(unittest.TestCase):
             ids = {item["id"] for item in data["checks"] if item["status"] == "blocker"}
             self.assertTrue({"pilot_password", "session_secret", "api_key", "model", "master",
                              "secure_cookie", "analysis_limit", "start_command"} <= ids)
+
+    def account_configuration(self, root: Path, db_path: Path, *, registration_open="false"):
+        env = self.configured(root)
+        env.update({
+            "SLPS_AUTH_MODE": "accounts",
+            "SLPS_ACCOUNT_REGISTRATION_OPEN": registration_open,
+            "SLPS_ACCOUNT_DB_PATH": str(db_path),
+        })
+        env.pop("SLPS_PILOT_PASSWORD")
+        env.pop("SLPS_PILOT_TENANT_ID")
+        env.pop("SLPS_PILOT_OWNER_ID")
+        return env
+
+    @staticmethod
+    def eligible_account(db_path: Path):
+        store = AccountStore(db_path)
+        user = store.register(email="owner@example.test", password="long-account-test-password",
+                              company_name="Synthetic Company", company_identifier="CHE123456789",
+                              role="Representative", locale="it")
+        assert store.consume_token(store.issue_token(user["id"], "email"), "email")
+        store.verify_company(user["company_id"], user["id"])
+
+    def test_accounts_mode_does_not_require_pilot_password_and_validates_ready_login(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Procfile").write_text("web: " + preflight.EXPECTED_START + "\n")
+            db_path = root.parent / (root.name + "-accounts.sqlite3")
+            try:
+                self.eligible_account(db_path)
+                before = hashlib.sha256(db_path.read_bytes()).hexdigest()
+                env = self.account_configuration(root, db_path)
+                with mock.patch.object(preflight, "persistent_path_ok", return_value=True):
+                    data = preflight.report(preflight.run_checks(env, root))
+                self.assertEqual(hashlib.sha256(db_path.read_bytes()).hexdigest(), before)
+                self.assertTrue(data["ready"])
+                self.assertEqual(data["auth_profile"], "accounts")
+                checks = {item["id"]: item for item in data["checks"]}
+                self.assertNotIn("pilot_password", checks)
+                self.assertNotIn("secrets_distinct", checks)
+                self.assertNotIn("tenant_id", checks)
+                self.assertNotIn("owner_id", checks)
+                self.assertEqual(checks["account_db_schema"]["status"], "pass")
+                self.assertEqual(checks["account_db_permissions"]["status"], "pass")
+                self.assertEqual(checks["account_login_ready"]["status"], "pass")
+                self.assertEqual(checks["account_delivery"]["status"], "warning")
+                serialized = json.dumps(data)
+                self.assertNotIn("owner@example.test", serialized)
+                self.assertNotIn(str(db_path), serialized)
+            finally:
+                db_path.unlink(missing_ok=True)
+
+    def test_account_db_must_not_be_readable_by_group_or_others(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Procfile").write_text("web: " + preflight.EXPECTED_START + "\n")
+            db_path = root.parent / (root.name + "-permissions.sqlite3")
+            try:
+                self.eligible_account(db_path)
+                db_path.chmod(0o640)
+                env = self.account_configuration(root, db_path)
+                with mock.patch.object(preflight, "persistent_path_ok", return_value=True):
+                    checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks["account_db_permissions"].status, "blocker")
+                self.assertEqual(checks["account_login_ready"].status, "pass")
+            finally:
+                db_path.unlink(missing_ok=True)
+
+    def test_accounts_mode_reports_registration_delivery_and_login_blockers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Procfile").write_text("web: " + preflight.EXPECTED_START + "\n")
+            db_path = root.parent / (root.name + "-empty-accounts.sqlite3")
+            try:
+                AccountStore(db_path)
+                env = self.account_configuration(root, db_path, registration_open="true")
+                with mock.patch.object(preflight, "persistent_path_ok", return_value=True):
+                    checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks["account_login_ready"].status, "blocker")
+                self.assertEqual(checks["account_delivery"].status, "blocker")
+                self.assertEqual(checks["account_db_schema"].status, "pass")
+            finally:
+                db_path.unlink(missing_ok=True)
+
+    def test_accounts_mode_requires_explicit_safe_db_and_strict_boolean(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Procfile").write_text("web: " + preflight.EXPECTED_START + "\n")
+            env = self.account_configuration(root, root / "accounts.sqlite3", registration_open="yes")
+            checks = {item.id: item for item in preflight.run_checks(env, root)}
+            self.assertEqual(checks["account_registration_setting"].status, "blocker")
+            self.assertEqual(checks["account_db_path"].status, "blocker")
+            self.assertEqual(checks["account_login_ready"].status, "blocker")
+
+    def test_existing_account_db_with_wrong_schema_is_a_blocker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Procfile").write_text("web: " + preflight.EXPECTED_START + "\n")
+            db_path = root.parent / (root.name + "-wrong.sqlite3")
+            try:
+                db_path.write_text("not sqlite")
+                db_path.chmod(0o600)
+                env = self.account_configuration(root, db_path)
+                with mock.patch.object(preflight, "persistent_path_ok", return_value=True):
+                    checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks["account_db_schema"].status, "blocker")
+                self.assertEqual(checks["account_login_ready"].status, "blocker")
+            finally:
+                db_path.unlink(missing_ok=True)
+
+    def test_invalid_auth_mode_fails_closed_without_guessing_a_profile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for value in ("automatic", " accounts", "accounts ", "ACCOUNTS", "Pilot"):
+                with self.subTest(value=value):
+                    env = self.configured(root)
+                    env["SLPS_AUTH_MODE"] = value
+                    data = preflight.report(preflight.run_checks(env, root))
+                    checks = {item["id"]: item for item in data["checks"]}
+                    self.assertFalse(data["ready"])
+                    self.assertEqual(data["auth_profile"], "invalid")
+                    self.assertEqual(checks["auth_mode"]["status"], "blocker")
+                    self.assertNotIn("pilot_password", checks)
+                    self.assertNotIn("account_db_path", checks)
 
     def test_optional_sources_warn_when_absent_and_block_when_invalid(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -125,6 +125,11 @@ restano necessarie. Non è stata pubblicata una nuova versione online.
 La procedura di configurazione, controllo offline e ripristino del pilota è in
 `docs/PILOT_DEPLOY.md`. Il preflight non contatta il fornitore AI e non prova
 credito, disponibilità del modello o persistenza effettiva del volume.
+Il controllo distingue il profilo `pilot` da `accounts`: nel secondo non
+richiede la password pilota e verifica configurazione, schema, permessi e
+presenza di un account idoneo al login. Segnala come blocco l'apertura delle
+registrazioni finché verifica email e recupero password non hanno un canale di
+consegna reale. Non crea né modifica account durante il controllo.
 Il collaudo della versione reale è definito in `docs/STAGING_ACCEPTANCE.md`.
 Le viste e i test con dati sintetici non soddisfano la verifica del motore AI reale.
 
