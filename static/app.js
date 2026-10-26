@@ -52,6 +52,26 @@
   Object.assign(languageOverrides.de, { archiveFullExisting:'Archivspeicher voll: Bestehende Fälle bleiben verfügbar.', sessionReloadLoss:'Sitzung abgelaufen und erneute Anmeldung nicht verfügbar. Laden Sie die Seite neu. Der lokale Bericht bleibt bis dahin sichtbar, geht beim Neuladen aber verloren.' });
   Object.assign(languageOverrides.fr, { archiveFullExisting:'Espace de l’historique saturé : les dossiers existants restent disponibles.', sessionReloadLoss:'Session expirée et nouvelle connexion indisponible. Rechargez la page. Le rapport local reste visible jusque-là, mais sera perdu au rechargement.' });
   Object.assign(languageOverrides.en, { archiveFullExisting:'History storage is full: existing cases remain available.', sessionReloadLoss:'Session expired and a new sign-in is unavailable. Reload the page. The local report remains visible until then but will be lost on reload.' });
+  const syntheticVideoTranslations = {
+    it: {
+      syntheticAction:'Avvia collaudo sintetico video e audio',syntheticOnly:'Risultato di collaudo sintetico: non è un’analisi AI reale.',syntheticConsumes:'Questo collaudo privato usa risposte simulate. Se completato, utilizza l’unica prova aziendale; nessun servizio AI reale viene chiamato.',syntheticRunning:'Collaudo sintetico in corso…',syntheticComplete:'Rapporto video sintetico salvato',syntheticCoverage:'Copertura: {count} fotogrammi su {seconds} secondi. Sono campioni temporali, non una visione continua del video.',syntheticSpoken:'Parlato dichiarato, distinto dalle evidenze visive',syntheticTranscriptAvailable:'Trascrizione sintetica disponibile',syntheticTranscriptUnknown:'Il parlato non è comprensibile: restano informazioni da chiarire.',syntheticTranscriptNA:'Trascrizione non applicabile allo stato audio rilevato.',syntheticAudio:'Stato audio: {status}',syntheticNoAmbient:'I rumori ambientali e i livelli acustici non sono stati analizzati.',syntheticFrame:'Fotogramma campionato a {seconds} s',syntheticSourceMissing:'Il caso sorgente o le sue evidenze non sono disponibili. Il rapporto resta consultabile, ma i fotogrammi non possono essere mostrati.',syntheticQuestionNote:'Domande da chiarire sul posto. Questo collaudo video non consente una nuova analisi delle risposte.',syntheticOpenSaved:'Apri il rapporto salvato',syntheticQuotaUnknown:'Il rapporto è stato salvato, ma l’utilizzo della prova non è confermato. Non avviare altre analisi finché il conteggio non è verificato.',syntheticQuotaUsed:'Rapporto salvato e prova aziendale utilizzata. Nessuna nuova prova è disponibile; lo stato dettagliato della quota non è temporaneamente consultabile.',syntheticUnavailable:'Il percorso sintetico non è disponibile o il limite di richieste è stato raggiunto. Nessuna nuova elaborazione è stata confermata.',syntheticFailure:'Il collaudo sintetico non ha prodotto un nuovo rapporto confermato.',syntheticFrameMissing:'Il fotogramma associato a questo rilievo non è disponibile.',syntheticOpenFrame:'Apri il fotogramma',syntheticVisible:'Visibile nel fotogramma campionato',syntheticCropCaption:'Dettaglio del rilievo {id} · {seconds} s',syntheticUnknownNetwork:'L’esito della richiesta non è confermato. Prima di riprovare, verificare l’archivio e il conteggio della prova.',syntheticHistory:'Rapporto video di collaudo sintetico · nessuna analisi AI reale'
+    },
+    de: {
+      syntheticAction:'Synthetischen Video- und Audiotest starten',syntheticOnly:'Synthetisches Testergebnis: keine echte KI-Analyse.',syntheticConsumes:'Dieser private Test verwendet simulierte Antworten. Bei Erfolg wird der einmalige Unternehmenstest genutzt; kein echter KI-Dienst wird aufgerufen.',syntheticRunning:'Synthetischer Test läuft…',syntheticComplete:'Synthetischer Videobericht gespeichert',syntheticCoverage:'Abdeckung: {count} Einzelbilder aus {seconds} Sekunden. Dies sind zeitliche Stichproben, keine kontinuierliche Betrachtung.',syntheticSpoken:'Gesprochene Angaben, getrennt von visuellen Nachweisen',syntheticTranscriptAvailable:'Synthetische Transkription verfügbar',syntheticTranscriptUnknown:'Die Sprache ist unverständlich; Angaben müssen noch geklärt werden.',syntheticTranscriptNA:'Für den festgestellten Audiostatus ist keine Transkription anwendbar.',syntheticAudio:'Audiostatus: {status}',syntheticNoAmbient:'Umgebungsgeräusche und Schallpegel wurden nicht analysiert.',syntheticFrame:'Stichprobenbild bei {seconds} s',syntheticSourceMissing:'Der Quellfall oder seine Nachweise sind nicht verfügbar. Der Bericht bleibt lesbar, Einzelbilder können jedoch nicht angezeigt werden.',syntheticQuestionNote:'Fragen vor Ort klären. Dieser Videotest erlaubt keine erneute Analyse der Antworten.',syntheticOpenSaved:'Gespeicherten Bericht öffnen',syntheticQuotaUnknown:'Bericht gespeichert; die Nutzung des Tests ist jedoch nicht bestätigt. Keine weiteren Analysen starten, bis die Zählung geprüft ist.',syntheticQuotaUsed:'Bericht gespeichert und Unternehmenstest genutzt. Kein neuer Test verfügbar; der genaue Kontingentstatus ist vorübergehend nicht abrufbar.',syntheticUnavailable:'Der synthetische Ablauf ist nicht verfügbar oder die Anfragegrenze wurde erreicht. Keine neue Verarbeitung wurde bestätigt.',syntheticFailure:'Der synthetische Test hat keinen neuen bestätigten Bericht erzeugt.',syntheticFrameMissing:'Das zu dieser Beobachtung gehörende Einzelbild ist nicht verfügbar.',syntheticOpenFrame:'Einzelbild öffnen',syntheticVisible:'Im Stichprobenbild sichtbar',syntheticCropCaption:'Detail zu Beobachtung {id} · {seconds} s',syntheticUnknownNetwork:'Das Ergebnis der Anfrage ist nicht bestätigt. Vor einem neuen Versuch Archiv und Testzählung prüfen.',syntheticHistory:'Synthetischer Videotestbericht · keine echte KI-Analyse'
+    },
+    fr: {
+      syntheticAction:'Lancer le test synthétique vidéo et audio',syntheticOnly:'Résultat de test synthétique : ce n’est pas une analyse IA réelle.',syntheticConsumes:'Ce test privé utilise des réponses simulées. En cas de réussite, il utilise l’unique essai de l’entreprise ; aucun service IA réel n’est appelé.',syntheticRunning:'Test synthétique en cours…',syntheticComplete:'Rapport vidéo synthétique enregistré',syntheticCoverage:'Couverture : {count} images sur {seconds} secondes. Ce sont des échantillons temporels, pas une observation continue.',syntheticSpoken:'Paroles déclarées, distinctes des preuves visuelles',syntheticTranscriptAvailable:'Transcription synthétique disponible',syntheticTranscriptUnknown:'Les paroles sont incompréhensibles : des informations restent à clarifier.',syntheticTranscriptNA:'La transcription ne s’applique pas à l’état audio constaté.',syntheticAudio:'État audio : {status}',syntheticNoAmbient:'Les bruits ambiants et les niveaux sonores n’ont pas été analysés.',syntheticFrame:'Image échantillonnée à {seconds} s',syntheticSourceMissing:'Le dossier source ou ses preuves ne sont pas disponibles. Le rapport reste consultable, mais les images ne peuvent pas être affichées.',syntheticQuestionNote:'Questions à clarifier sur place. Ce test vidéo ne permet pas une nouvelle analyse des réponses.',syntheticOpenSaved:'Ouvrir le rapport enregistré',syntheticQuotaUnknown:'Le rapport est enregistré, mais l’utilisation de l’essai n’est pas confirmée. Ne lancez aucune autre analyse avant vérification du décompte.',syntheticQuotaUsed:'Rapport enregistré et essai de l’entreprise utilisé. Aucun nouvel essai disponible ; le statut détaillé du quota est temporairement inaccessible.',syntheticUnavailable:'Le parcours synthétique est indisponible ou la limite des requêtes est atteinte. Aucun nouveau traitement n’a été confirmé.',syntheticFailure:'Le test synthétique n’a pas produit de nouveau rapport confirmé.',syntheticFrameMissing:'L’image associée à cette observation n’est pas disponible.',syntheticOpenFrame:'Ouvrir l’image',syntheticVisible:'Visible dans l’image échantillonnée',syntheticCropCaption:'Détail de l’observation {id} · {seconds} s',syntheticUnknownNetwork:'Le résultat de la requête n’est pas confirmé. Vérifiez l’historique et le décompte de l’essai avant de réessayer.',syntheticHistory:'Rapport de test vidéo synthétique · aucune analyse IA réelle'
+    },
+    en: {
+      syntheticAction:'Run synthetic video and audio test',syntheticOnly:'Synthetic test result: this is not a real AI analysis.',syntheticConsumes:'This private test uses simulated responses. If successful, it uses the company’s single trial; no real AI service is called.',syntheticRunning:'Synthetic test running…',syntheticComplete:'Synthetic video report saved',syntheticCoverage:'Coverage: {count} frames from {seconds} seconds. These are time samples, not continuous observation.',syntheticSpoken:'Spoken claims, separate from visual evidence',syntheticTranscriptAvailable:'Synthetic transcript available',syntheticTranscriptUnknown:'Speech is unintelligible; information still needs clarification.',syntheticTranscriptNA:'Transcription does not apply to the observed audio status.',syntheticAudio:'Audio status: {status}',syntheticNoAmbient:'Ambient sounds and sound levels were not analysed.',syntheticFrame:'Sampled frame at {seconds} s',syntheticSourceMissing:'The source case or its evidence is unavailable. The report remains readable, but sampled frames cannot be shown.',syntheticQuestionNote:'Questions to clarify on site. This video test does not support a new analysis of the answers.',syntheticOpenSaved:'Open the saved report',syntheticQuotaUnknown:'The report was saved, but trial usage is unconfirmed. Do not start another analysis until accounting has been checked.',syntheticQuotaUsed:'Report saved and company trial used. No new trial is available; detailed quota status is temporarily unavailable.',syntheticUnavailable:'The synthetic path is unavailable or its request limit has been reached. No new processing was confirmed.',syntheticFailure:'The synthetic test did not produce a new confirmed report.',syntheticFrameMissing:'The frame associated with this finding is unavailable.',syntheticOpenFrame:'Open frame',syntheticVisible:'Visible in the sampled frame',syntheticCropCaption:'Finding {id} detail · {seconds} s',syntheticUnknownNetwork:'The request outcome is unconfirmed. Check the archive and trial accounting before trying again.',syntheticHistory:'Synthetic video test report · no real AI analysis'
+    }
+  };
+  const syntheticAudioLabels = {"it": {"syntheticAudioPresent": "Traccia audio presente ed estratta", "syntheticAudioAbsent": "Nessuna traccia audio", "syntheticAudioSilent": "Traccia audio silenziosa", "syntheticAudioLow": "Traccia audio poco udibile", "syntheticAudioError": "Stato della traccia non verificabile"}, "de": {"syntheticAudioPresent": "Audiospur vorhanden und extrahiert", "syntheticAudioAbsent": "Keine Audiospur vorhanden", "syntheticAudioSilent": "Stumme Audiospur", "syntheticAudioLow": "Leise Audiospur", "syntheticAudioError": "Audiostatus nicht überprüfbar"}, "fr": {"syntheticAudioPresent": "Piste audio présente et extraite", "syntheticAudioAbsent": "Aucune piste audio", "syntheticAudioSilent": "Piste audio silencieuse", "syntheticAudioLow": "Piste audio peu audible", "syntheticAudioError": "État audio non vérifiable"}, "en": {"syntheticAudioPresent": "Audio track present and extracted", "syntheticAudioAbsent": "No audio track", "syntheticAudioSilent": "Silent audio track", "syntheticAudioLow": "Low-level audio track", "syntheticAudioError": "Audio track status cannot be verified"}};
+  localeCodes.forEach(code => Object.assign(syntheticVideoTranslations[code], syntheticAudioLabels[code]));
+  localeCodes.forEach(code => Object.assign(code === 'it' ? messages.it : languageOverrides[code], syntheticVideoTranslations[code]));
+  const videoQuestionTranslations = {"it": {"photoQuestionsNote": "Per aggiornare un rapporto salvato, aggiungi prima la fotografia originale. Poi potrai rispondere alle domande senza perdere il contesto.", "photoQuestionsHelp": "Rispondi prima alle domande decisive. Se non conosci una risposta, lasciala vuota. L’aggiornamento avvia una nuova analisi AI.", "syntheticResultUnreadable": "Il rapporto è stato salvato e la prova utilizzata, ma non è stato possibile mostrarlo. Apri il rapporto salvato o consulta l’archivio; non avviare una nuova analisi."}, "de": {"photoQuestionsNote": "Fügen Sie zum Aktualisieren zuerst das Originalfoto hinzu. Danach können Sie Fragen beantworten, ohne den Kontext zu verlieren.", "photoQuestionsHelp": "Beantworten Sie zuerst entscheidende Fragen. Lassen Sie unbekannte Antworten leer. Die Aktualisierung startet eine neue KI-Analyse.", "syntheticResultUnreadable": "Bericht gespeichert und Test genutzt, die Anzeige ist jedoch fehlgeschlagen. Öffnen Sie den gespeicherten Bericht oder das Archiv; keine neue Analyse starten."}, "fr": {"photoQuestionsNote": "Pour actualiser un rapport enregistré, ajoutez d’abord la photo originale. Vous pourrez ensuite répondre aux questions sans perdre le contexte.", "photoQuestionsHelp": "Répondez d’abord aux questions décisives. Laissez une réponse vide si vous ne la connaissez pas. La mise à jour lance une nouvelle analyse IA.", "syntheticResultUnreadable": "Le rapport est enregistré et l’essai utilisé, mais l’affichage a échoué. Ouvrez le rapport enregistré ou consultez l’historique ; ne lancez pas de nouvelle analyse."}, "en": {"photoQuestionsNote": "To update a saved report, add the original photo first. You can then answer questions without losing context.", "photoQuestionsHelp": "Answer decisive questions first. Leave an answer blank if unknown. Updating starts a new AI analysis.", "syntheticResultUnreadable": "The report was saved and the trial used, but it could not be displayed. Open the saved report or check the archive; do not start a new analysis."}};
+  localeCodes.forEach(code => Object.assign(code === 'it' ? messages.it : languageOverrides[code], videoQuestionTranslations[code]));
+
   localeCodes.slice(1).forEach(code => { messages[code] = { ...messages.it, ...languageOverrides[code] }; });
   const messageKeys = Object.keys(messages.it).sort();
   localeCodes.forEach(code => { if (Object.keys(messages[code]).sort().join('\0') !== messageKeys.join('\0')) throw new Error('Incomplete UI locale: ' + code); });
@@ -59,13 +79,13 @@
   const storedLocale = (() => { try { return window.localStorage?.getItem('slps.locale'); } catch { return null; } })();
   const browserLocale = typeof navigator === 'object' && navigator.language ? navigator.language.slice(0, 2).toLowerCase() : 'it';
   const initialLocale = localeCodes.includes(storedLocale) ? storedLocale : localeCodes.includes(browserLocale) ? browserLocale : 'it';
-  const state = { language: initialLocale, csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, historyCases: [], openedCaseId: null, file: null, mediaKind: null, imageUrl: null, mediaUrl: null, videoInspection: null, technicalArchiveOpen: false, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_intake_enabled: false, video_analysis_enabled: false } };
+  const state = { language: initialLocale, csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, historyCases: [], openedCaseId: null, file: null, mediaKind: null, imageUrl: null, mediaUrl: null, videoInspection: null, technicalArchiveOpen: false, videoReportSource: null, syntheticVideoBusy: false, quotaUncertain: false, videoTrialConsumed: false, savedVideoResultId: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_intake_enabled: false, video_analysis_enabled: false, video_synthetic_analysis_enabled: false } };
   const t = (key, vars = {}) => String(messages[state.language][key] ?? messages.it[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
   const certaintyLabels = { visible: 'visible', reported: 'reported', verify: 'verify' };
   const riskLabels = { high: 'highRisk', medium: 'mediumRisk', low: 'lowRisk', undetermined: 'unknownRisk' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
   function apiErrorMessage(code, status) {
-    const byCode = { authentication_required: 'unauthorized', invalid_csrf: 'unauthorized', account_verification_required: 'forbidden', analysis_disabled: 'forbidden', trial_exhausted: 'forbidden', invalid_image: 'invalidRequest', invalid_video: 'invalidRequest', invalid_request: 'invalidRequest', file_too_large: 'tooLarge', rate_limited: 'rateLimited', configuration_missing: 'serverUnavailable', provider_unavailable: 'serverUnavailable' };
+    const byCode = { trial_completion_unknown: 'syntheticQuotaUnknown', video_synthetic_analysis_disabled: 'syntheticUnavailable', provider_request_cap_required: 'syntheticUnavailable', provider_request_cap_reached: 'syntheticUnavailable', video_adapter_unavailable: 'syntheticUnavailable', video_evidence_invalid: 'syntheticFailure', video_adapter_failed: 'syntheticFailure', video_analysis_timeout: 'syntheticFailure', video_result_not_saved: 'syntheticFailure', video_trial_not_confirmed: 'syntheticFailure', video_analysis_failed: 'syntheticFailure', authentication_required: 'unauthorized', invalid_csrf: 'unauthorized', account_verification_required: 'forbidden', analysis_disabled: 'forbidden', trial_exhausted: 'forbidden', invalid_image: 'invalidRequest', invalid_video: 'invalidRequest', invalid_request: 'invalidRequest', file_too_large: 'tooLarge', rate_limited: 'rateLimited', configuration_missing: 'serverUnavailable', provider_unavailable: 'serverUnavailable' };
     return t(byCode[code] || (status === 401 ? 'unauthorized' : status === 403 ? 'forbidden' : status === 413 ? 'tooLarge' : status === 429 ? 'rateLimited' : status >= 500 ? 'serverUnavailable' : 'genericApiError'));
   }
   function localizedError(error) { return error?.name === 'AbortError' ? t('requestAborted') : apiErrorMessage(error?.code, error?.status || 0); }
@@ -121,6 +141,8 @@
     $('result-step-note').textContent = state.busy ? t('processing') : hasTechnicalCase ? t('verificationAvailable') : hasReport ? t('reportAvailable') : t('actionsClarifications');
     const needsArchivedPhoto = Boolean(state.analysis && !state.file);
     $('questions-photo-note').hidden = !needsArchivedPhoto;
+    if (isSyntheticVideo(state.analysis)) { $('questions-photo-note').textContent = t('syntheticQuestionNote'); $('questions-photo-note').hidden = false; } else $('questions-photo-note').textContent = t('photoQuestionsNote');
+    $('questions-help').textContent = t(isSyntheticVideo(state.analysis) ? 'syntheticQuestionNote' : 'photoQuestionsHelp');
     $('questions').querySelectorAll('textarea').forEach(input => { input.disabled = state.busy || needsArchivedPhoto; });
   }
   function showView(view, focus = false) {
@@ -190,7 +212,17 @@
     const trialExhausted = state.entitlement.plan === 'trial' && state.entitlement.analyses_remaining === 0;
     const canExport = state.entitlement.export_allowed !== false;
     const videoReady = state.mediaKind === 'video' && state.media.video_intake_enabled;
-    $('analyse-button').disabled = state.busy || (videoReady ? false : !state.configured || state.mediaKind === 'video' || (trialExhausted && !state.openedCaseId)); $('reanalyse-button').disabled = state.busy || !state.configured;
+    $('analyse-button').disabled = state.busy || state.quotaUncertain || state.videoTrialConsumed || (videoReady ? false : !state.configured || state.mediaKind === 'video' || (trialExhausted && !state.openedCaseId)); $('reanalyse-button').disabled = state.busy || state.quotaUncertain || isSyntheticVideo(state.analysis) || !state.configured;
+    $('reanalyse-button').hidden = isSyntheticVideo(state.analysis);
+    $('edit-analysis').hidden = isSyntheticVideo(state.analysis);
+    const videoSyntheticAvailable = state.authenticated && state.media.video_synthetic_analysis_enabled === true && Boolean(state.videoInspection && state.archive?.saved && state.openedCaseId && !state.analysis);
+    $('video-synthetic-controls').hidden = !videoSyntheticAvailable || trialExhausted || state.quotaUncertain || state.videoTrialConsumed;
+    $('video-analyze-button').disabled = state.busy || trialExhausted || state.quotaUncertain || state.videoTrialConsumed;
+    $('video-analyze-button').textContent = t(state.syntheticVideoBusy ? 'syntheticRunning' : 'syntheticAction');
+    $('video-synthetic-note').textContent = t('syntheticConsumes');
+    $('video-open-saved-result').hidden = !state.savedVideoResultId || Boolean(state.analysis);
+    $('video-open-saved-result').disabled = state.busy;
+    $('video-open-saved-result').textContent = t('syntheticOpenSaved');
     if (!state.busy) $('analyse-button').textContent = state.mediaKind === 'video' ? t('inspectVideo') : t('startAnalysis');
     $('export-json').disabled = state.busy || !state.analysis || !canExport; $('print-report').disabled = state.busy || !state.analysis || !canExport;
     $('export-json').hidden = !canExport; $('print-report').hidden = !canExport; $('trial-export-note').hidden = canExport || !state.analysis;
@@ -204,8 +236,8 @@
     state.busy = value; updateButton(); $('photo').disabled = value; $('context').disabled = value; $('logout').disabled = value;
     const video = state.mediaKind === 'video';
     $('busy-eyebrow').textContent = video ? t('videoAudioReceived') : t('photoContextSent');
-    $('busy-title').textContent = video ? t('videoRunning') : t('analysisRunning');
-    $('busy-description').textContent = video ? t('videoRunningDescription') : t('analysisRunningDescription');
+    $('busy-title').textContent = state.syntheticVideoBusy ? t('syntheticRunning') : video ? t('videoRunning') : t('analysisRunning');
+    $('busy-description').textContent = state.syntheticVideoBusy ? t('syntheticOnly') : video ? t('videoRunningDescription') : t('analysisRunningDescription');
     $('analyse-button').textContent = value ? (state.mediaKind === 'video' ? t('inspecting') : t('analysing')) : (state.mediaKind === 'video' ? t('inspectVideo') : t('startAnalysis'));
     $('reanalyse-button').textContent = value ? t('analysing') : state.analysis && !state.file ? t('addPhotoUpdate') : t('updateAnswers');
     $('busy-state').hidden = !value; $('report').hidden = value || !state.analysis; $('empty-state').hidden = value || Boolean(state.analysis) || Boolean(state.videoInspection);
@@ -213,12 +245,16 @@
     $('result-region').setAttribute('aria-labelledby', value ? 'busy-title' : state.analysis ? 'report-title' : 'result-title');
   }
   function clearAnalysis() {
+    state.videoReportSource = null; state.savedVideoResultId = state.quotaUncertain ? state.savedVideoResultId : null;
+    $('video-analysis-details').replaceChildren(); $('video-analysis-details').hidden = true;
     state.analysis = null; state.archive = null; state.openedCaseId = null; state.videoInspection = null; state.technicalArchiveOpen = false; state.answers.clear(); state.submittedContext = ''; state.editing = true; clearFeedback();
     $('report').hidden = true; $('empty-state').hidden = false; $('findings').replaceChildren(); $('questions').replaceChildren();
     $('video-evidence').hidden = true; $('video-frames').replaceChildren(); $('archived-video').hidden = true; $('archived-video').removeAttribute('src'); $('video-archive-note').hidden = true;
     $('case-summary').replaceChildren(); $('question-summary').replaceChildren(); $('question-summary').hidden = true;
     $('report-notice').hidden = true; $('report-title').textContent = t('completed');
     $('analysis-announcement').textContent = '';
+    $('video-synthetic-status').hidden = !state.quotaUncertain;
+    if (state.quotaUncertain) $('video-synthetic-status').textContent = t('syntheticQuotaUnknown');
     $('result-region').setAttribute('aria-labelledby', 'result-title'); updateButton();
   }
   function resetHistory() {
@@ -258,10 +294,11 @@
     $('history-list').replaceChildren(); $('history-empty').hidden = cases.length !== 0;
     cases.forEach(item => {
       const technicalVideo = item.kind === 'video_technical_verification';
+      const syntheticVideo = item.kind === 'video_synthetic_analysis';
       const card = make('article', null, 'history-item'); card.dataset.caseId = item.id;
       const body = make('div', null, 'history-item-body'); body.append(make('h3', caseExcerpt(item.summary, technicalVideo ? t('videoTechnical') : t('analysisNoSummary'))));
       body.append(make('p', caseDate(item.created_at), 'history-date'));
-      if (technicalVideo) body.append(make('p', t('videoTechnicalContext'), 'history-context'));
+      if (technicalVideo || syntheticVideo) body.append(make('p', t(syntheticVideo ? 'syntheticHistory' : 'videoTechnicalContext'), 'history-context'));
       if (item.deletion_pending) body.append(make('p', t('caseUnavailable'), 'notice warning'));
       if (item.context) body.append(make('p', caseExcerpt(item.context), 'history-context'));
       const actions = make('div', null, 'history-actions');
@@ -291,7 +328,153 @@
       $('history-status').textContent = t('historyLoadFailed'); if (focus) { showView('history'); focusFeedback('history-error'); }
     } finally { $('history-loading').hidden = true; setHistoryBusy(false); }
   }
+  const isSyntheticVideo = analysis => analysis?.meta?.case_kind === 'video_synthetic_analysis';
+  function assertSyntheticReport(analysis) {
+    const reject = () => { throw new Error(t('incompleteResult')); };
+    const meta = analysis?.meta, coverage = meta?.coverage, transcription = meta?.transcription;
+    if (!isSyntheticVideo(analysis) || meta.execution_mode !== 'synthetic_adapters' || meta.real_ai_analysis_performed !== false || (!Array.isArray(analysis.findings) || analysis.findings.length > 100)
+        || !coverage || !Number.isFinite(coverage.duration_seconds) || coverage.duration_seconds <= 0 || coverage.duration_seconds > 3600.05 || coverage.continuous_video_observed !== false
+        || coverage.ambient_sound_analysis_performed !== false || coverage.sampling_method !== 'archived_timestamp_samples'
+        || !Array.isArray(coverage.frames) || coverage.frames.length < 1 || coverage.frames.length > 10 || coverage.frame_count !== coverage.frames.length
+        || !['absent', 'silent', 'low_level', 'ready_for_transcription'].includes(coverage.audio_status)) reject();
+    const assetIds = new Set();
+    let previousFrameTime = -1;
+    for (const frame of coverage.frames) {
+      if (!frame || !Number.isFinite(frame.timestamp_seconds) || frame.timestamp_seconds < 0 || frame.timestamp_seconds > coverage.duration_seconds
+          || frame.timestamp_seconds <= previousFrameTime || typeof frame.asset_id !== 'string' || !frame.asset_id.trim() || frame.asset_id.length > 64 || assetIds.has(frame.asset_id)) reject();
+      assetIds.add(frame.asset_id); previousFrameTime = frame.timestamp_seconds;
+    }
+    if (!transcription || transcription.ambient_sound_analysis_performed !== false || transcription.basis !== 'spoken_claim'
+        || !['available', 'unintelligible', 'not_applicable'].includes(transcription.status)
+        || ![null, 'it', 'de', 'fr', 'en'].includes(transcription.language)
+        || !Array.isArray(transcription.segments) || transcription.segments.length > 200) reject();
+    const speechExpected = ['low_level', 'ready_for_transcription'].includes(coverage.audio_status);
+    if (transcription.status === 'not_applicable') {
+      if (speechExpected || transcription.reason !== coverage.audio_status || transcription.language !== null || transcription.text !== null || transcription.segments.length) reject();
+    } else if (!speechExpected || (transcription.status === 'unintelligible' && (transcription.text !== null || transcription.segments.length))) reject();
+    let previousSegmentStart = -1;
+    for (const segment of transcription.segments) {
+      if (!segment || segment.basis !== 'spoken_claim' || !Number.isFinite(segment.start_seconds) || !Number.isFinite(segment.end_seconds)
+          || segment.start_seconds < 0 || segment.start_seconds > segment.end_seconds || segment.end_seconds > coverage.duration_seconds + .05
+          || segment.start_seconds < previousSegmentStart || typeof segment.text !== 'string' || !segment.text.trim() || Array.from(segment.text).length > 4000) reject();
+      previousSegmentStart = segment.start_seconds;
+    }
+    if (transcription.status === 'available') {
+      const joined = transcription.segments.map(segment => segment.text).join(' ');
+      if (!joined.trim() || transcription.text !== joined || ['[inaudible]', '[unintelligible]', '[non comprensibile]'].includes(joined.toLowerCase())
+          || transcription.segments.reduce((bytes, segment) => bytes + new Blob([segment.text]).size, 0) > 32000) reject();
+    }
+    const basisForCertainty = { visible: 'sampled_frame', reported: 'reported', verify: 'verify' };
+    for (const finding of analysis.findings) {
+      const evidence = finding?.video_evidence;
+      if (!evidence || !Object.hasOwn(basisForCertainty, finding.certainty) || evidence.basis !== basisForCertainty[finding.certainty]) reject();
+      const frameIndex = coverage.frames.findIndex(frame => frame.asset_id === evidence.asset_id && frame.timestamp_seconds === evidence.timestamp_seconds);
+      if (frameIndex < 0 || typeof finding.id !== 'string' || !finding.id.startsWith('frame-' + (frameIndex + 1) + ':')) reject();
+    }
+  }
+  function privateAssetUrl(source, asset) {
+    if (!source || !asset || typeof asset.download_url !== 'string' || typeof asset.id !== 'string') return null;
+    const expected = '/api/cases/' + encodeURIComponent(source.id) + '/assets/' + encodeURIComponent(asset.id);
+    return asset.download_url === expected ? expected : null;
+  }
+  function videoFrameAsset(source, evidence) {
+    if (!source || !evidence || !Array.isArray(source.assets)) return null;
+    const asset = source.assets.find(item => item.id === evidence.asset_id && item.role === 'frame' && String(item.media_type).startsWith('image/'));
+    return privateAssetUrl(source, asset) ? asset : null;
+  }
+  function renderSyntheticDetails(target, analysis, source) {
+    const { coverage, transcription } = analysis.meta;
+    target.replaceChildren();
+    target.append(make('p', t('syntheticOnly'), 'notice warning'));
+    target.append(make('h3', t('syntheticComplete')), make('p', t('syntheticCoverage', { count: coverage.frame_count, seconds: coverage.duration_seconds.toFixed(1) }), 'video-coverage'));
+    const original = source?.assets?.find(asset => asset.role === 'original' && String(asset.media_type).startsWith('video/') && privateAssetUrl(source, asset));
+    if (original) { const video = make('video'); video.src = original.download_url; video.controls = true; video.preload = 'metadata'; video.setAttribute('aria-label', t('syntheticHistory')); target.append(video); }
+    if (!source) target.append(make('p', t('syntheticSourceMissing'), 'notice warning'));
+    const gallery = make('div', null, 'video-frames');
+    for (const evidence of coverage.frames) {
+      const asset = videoFrameAsset(source, evidence); if (!asset) continue;
+      const figure = make('figure', null, 'video-frame'), image = make('img'); image.src = asset.download_url; image.alt = t('syntheticFrame', { seconds: evidence.timestamp_seconds.toFixed(1) });
+      figure.append(image, make('figcaption', t('syntheticFrame', { seconds: evidence.timestamp_seconds.toFixed(1) }))); gallery.append(figure);
+    }
+    if (gallery.childNodes.length) target.append(gallery);
+    const audioLabels = { absent: 'syntheticAudioAbsent', silent: 'syntheticAudioSilent', low_level: 'syntheticAudioLow', ready_for_transcription: 'syntheticAudioPresent', error: 'syntheticAudioError' };
+    target.append(make('p', t('syntheticAudio', { status: t(audioLabels[coverage.audio_status] || 'syntheticAudioError') }), 'audio-summary'));
+    target.append(make('h3', t('syntheticSpoken')));
+    if (transcription?.status === 'available' && Array.isArray(transcription.segments) && transcription.segments.length) {
+      target.append(make('p', t('syntheticTranscriptAvailable'), 'field-note'));
+      const list = make('ol', null, 'transcript-segments');
+      for (const segment of transcription.segments) {
+        const item = make('li');
+        const time = Number.isFinite(segment.start_seconds) && Number.isFinite(segment.end_seconds) ? segment.start_seconds.toFixed(1) + '–' + segment.end_seconds.toFixed(1) + ' s' : t('notAvailable');
+        item.append(make('span', time, 'transcript-time'), make('p', segment.text)); list.append(item);
+      }
+      target.append(list);
+    } else target.append(make('p', t(transcription?.status === 'not_applicable' ? 'syntheticTranscriptNA' : 'syntheticTranscriptUnknown'), 'notice warning'));
+    target.append(make('p', t('syntheticNoAmbient'), 'field-note'));
+  }
+  async function openSyntheticVideoCase(saved, knownSource = null) {
+    assertSyntheticReport(saved.analysis);
+    let source = knownSource;
+    if (!source && typeof saved.analysis.meta.source_case_id === 'string') {
+      try { source = (await api('/api/cases/' + encodeURIComponent(saved.analysis.meta.source_case_id), { headers: { 'X-CSRF-Token': state.csrf } })).case; }
+      catch (err) { if (err.status === 401) throw err; source = null; }
+    }
+    const oldSource = state.videoReportSource, oldImage = state.imageUrl;
+    state.videoReportSource = source || null; state.imageUrl = null;
+    try { await renderAnalysis(saved.analysis, saved.context || '', { archived: true, videoSource: source }); }
+    catch (err) { state.videoReportSource = oldSource; state.imageUrl = oldImage; throw err; }
+    if (oldImage?.startsWith('blob:')) URL.revokeObjectURL(oldImage);
+    state.analysis = saved.analysis; state.file = null; state.mediaKind = 'video'; state.videoInspection = null; state.technicalArchiveOpen = false;
+    state.archive = { saved: true, case_id: saved.id, kind: 'video_synthetic_analysis' }; state.openedCaseId = saved.id; state.submittedContext = saved.context || ''; state.editing = false; state.answers.clear();
+    $('photo').value = ''; $('preview-wrap').hidden = true; $('video-evidence').hidden = true; $('archived-video').hidden = true;
+    $('report-title').textContent = t('syntheticComplete'); $('report-notice').textContent = t('syntheticOnly') + (state.quotaUncertain ? ' ' + t('syntheticQuotaUnknown') : ''); $('report-notice').hidden = false;
+    $('empty-state').hidden = true; $('report').hidden = false; showView('analysis'); updateButton(); focusFeedback('report-title');
+  }
+  async function runSyntheticVideo() {
+    if (state.busy || state.quotaUncertain || state.videoTrialConsumed || (state.entitlement.plan === 'trial' && state.entitlement.analyses_remaining === 0) || !state.authenticated || state.media.video_synthetic_analysis_enabled !== true
+        || !state.videoInspection || !state.archive?.saved || !state.openedCaseId || state.analysis) return;
+    const sourceId = state.openedCaseId, context = state.submittedContext || $('context').value || '';
+    state.syntheticVideoBusy = true; $('video-synthetic-status').hidden = true; setBusy(true); focusFeedback('busy-title');
+    try {
+      const data = await api('/api/media/cases/' + encodeURIComponent(sourceId) + '/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify({ context }) });
+      if (data.execution_mode !== 'synthetic_adapters' || data.real_ai_analysis !== false || data.trial_consumed !== true || !data.archive?.saved || !data.archive.case_id) throw new Error(t('incompleteResult'));
+      state.videoTrialConsumed = true; state.savedVideoResultId = data.archive.case_id;
+      assertSyntheticReport(data.analysis);
+      if (data.entitlement) state.entitlement = { ...state.entitlement, ...data.entitlement };
+      await openSyntheticVideoCase({ id: data.archive.case_id, context, analysis: data.analysis });
+      if (data.entitlement_status?.available === false) { $('report-notice').textContent = t('syntheticOnly') + ' ' + t('syntheticQuotaUsed'); $('report-notice').hidden = false; }
+      $('analysis-announcement').textContent = t('syntheticComplete'); loadCases();
+    } catch (err) {
+      if (err.status === 401) { await archiveSessionExpired(); return; }
+      if (state.videoTrialConsumed && !err.status) {
+        $('video-synthetic-status').textContent = t('syntheticResultUnreadable');
+      } else if (err.code === 'trial_completion_unknown' || !err.status) {
+        state.quotaUncertain = true;
+        state.savedVideoResultId = err.data?.archive?.saved ? err.data.archive.case_id : null;
+        $('video-synthetic-status').textContent = t(err.code === 'trial_completion_unknown' ? 'syntheticQuotaUnknown' : 'syntheticUnknownNetwork');
+      } else {
+        if (err.code === 'trial_exhausted') state.videoTrialConsumed = true;
+        $('video-synthetic-status').textContent = err.code === 'trial_exhausted' ? t('trialUsed') : t('syntheticFailure') + ' ' + localizedError(err);
+      }
+      $('video-synthetic-status').hidden = false; focusFeedback('video-synthetic-status');
+    } finally {
+      state.syntheticVideoBusy = false; setBusy(false);
+      if (state.analysis) focusFeedback('report-title');
+    }
+  }
+  $('video-analyze-button').addEventListener('click', runSyntheticVideo);
+  $('video-open-saved-result').addEventListener('click', async () => {
+    if (state.busy || !state.savedVideoResultId) return;
+    setBusy(true);
+    try {
+      const saved = (await api('/api/cases/' + encodeURIComponent(state.savedVideoResultId), { headers: { 'X-CSRF-Token': state.csrf } })).case;
+      await openSyntheticVideoCase(saved);
+    } catch (err) { $('video-synthetic-status').textContent = t(state.quotaUncertain ? 'syntheticQuotaUnknown' : 'syntheticResultUnreadable') + ' ' + localizedError(err); $('video-synthetic-status').hidden = false; focusFeedback('video-synthetic-status'); }
+    finally { setBusy(false); }
+  });
+
   function openTechnicalVideoCase(saved) {
+    if (!state.quotaUncertain) state.savedVideoResultId = null;
     const inspection = saved?.analysis?.meta?.video_inspection;
     if (!inspection || !Number.isFinite(inspection.duration_seconds) || !Array.isArray(inspection.frames) || !inspection.audio) throw new Error(t('savedVideoIncomplete'));
     const assets = Array.isArray(saved.assets) ? saved.assets : [];
@@ -323,6 +506,7 @@
       const saved = data.case;
       if (!saved?.analysis || !Array.isArray(saved.analysis.findings)) throw new Error(t('savedCaseIncomplete'));
       if (saved.analysis.meta?.case_kind === 'video_technical_verification') { openTechnicalVideoCase(saved); return; }
+      if (isSyntheticVideo(saved.analysis)) { await openSyntheticVideoCase(saved); return; }
       const previousImageUrl = state.imageUrl, previousFile = state.file, previousAnswers = new Map(state.answers);
       const original = Array.isArray(saved.assets) ? saved.assets.find(asset => asset?.role === 'original' && String(asset.media_type || '').startsWith('image/') && asset.download_url) : null;
       state.imageUrl = original ? original.download_url : null; state.file = null; state.answers.clear(); state.videoInspection = null; state.technicalArchiveOpen = false; $('video-evidence').hidden = true; $('archived-video').hidden = true; $('archived-video').removeAttribute('src'); $('video-archive-note').hidden = true;
@@ -421,6 +605,7 @@
   }
   async function analyse(origin = 'analysis') {
     if (state.busy) return;
+    if (state.quotaUncertain) { notice(t('syntheticQuotaUnknown'), 'warning'); return; }
     clearFeedback();
     if (!state.file) { focusFeedback(analysisError(t('selectMedia'), origin)); return; }
     if (state.mediaKind === 'video') { await inspectVideo(origin); return; }
@@ -504,12 +689,13 @@
   $('analysis-form').addEventListener('submit', e => { e.preventDefault(); analyse(); });
   $('questions-form').addEventListener('submit', e => {
     e.preventDefault();
+    if (state.analysis?.meta?.case_kind === 'video_synthetic_analysis' || state.quotaUncertain) return;
     if (state.analysis && !state.file) { state.editing = true; showView('analysis', true); return; }
     $('questions').querySelectorAll('textarea').forEach(input => { const answer = input.value.trim(); if (answer) state.answers.set(input.dataset.question, answer); else state.answers.delete(input.dataset.question); });
     analyse('questions');
   });
   function addText(parent, tag, text, cls) { if (text) parent.append(make(tag, text, cls)); }
-  async function createCrop(bbox, image, id) {
+  async function createCrop(bbox, image, id, sourceUrl = state.imageUrl, timestamp = null) {
     if (!bbox || !image || ![bbox.x, bbox.y, bbox.width, bbox.height].every(Number.isFinite)) return null;
     const { x, y, width, height } = bbox;
     if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1.001 || y + height > 1.001) return null;
@@ -519,8 +705,8 @@
     canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', t('cropAria', { id }));
     const ctx = canvas.getContext('2d'); if (!ctx) return null;
     try { ctx.drawImage(image, x * image.naturalWidth, y * image.naturalHeight, sw, sh, 0, 0, canvas.width, canvas.height); } catch { return null; }
-    const caption = make('figcaption'); caption.append(make('span', t('cropCaption', { id })));
-    const link = make('a', t('fullPhoto')); link.href = state.imageUrl; link.target = '_blank'; link.rel = 'noopener'; caption.append(link); figure.append(canvas, caption); return figure;
+    const caption = make('figcaption'); caption.append(make('span', timestamp === null ? t('cropCaption', { id }) : t('syntheticCropCaption', { id, seconds: timestamp.toFixed(1) })));
+    const link = make('a', t(timestamp === null ? 'fullPhoto' : 'syntheticOpenFrame')); link.href = sourceUrl; link.target = '_blank'; link.rel = 'noopener'; caption.append(link); figure.append(canvas, caption); return figure;
   }
   function validUrl(url) { try { const parsed = new URL(url); return parsed.protocol === 'https:' ? parsed.href : null; } catch { return null; } }
   function collectQuestions(analysis) {
@@ -543,12 +729,14 @@
     const draft = document.getElementById('report').cloneNode(true);
     const $ = id => id === 'preview' ? document.getElementById(id) : draft.querySelector('#' + id);
     $('summary').textContent = analysis.summary || '';
+    const synthetic = isSyntheticVideo(analysis), videoSource = options.videoSource === undefined ? state.videoReportSource : options.videoSource;
+    if (synthetic) assertSyntheticReport(analysis);
     const questionList = collectQuestions(analysis);
     const hasUnknown = Boolean(analysis.needs_clarification) || analysis.findings.some(f => f.critical_unknown || f.risk === 'undetermined') || questionList.some(q => q.critical);
     $('assessment-state').textContent = hasUnknown ? t('assessmentIncomplete') : t('assessmentProposed');
     $('assessment-state').className = 'assessment-state' + (hasUnknown ? ' incomplete' : '');
     $('findings').replaceChildren();
-    let image = !state.imageUrl ? null : $('preview');
+    let image = synthetic || !state.imageUrl ? null : $('preview');
     if (image) { try { await image.decode(); } catch { image = null; } }
     // Snapshot only the photo and context used by this successful request.
     const meta = analysis.meta || {};
@@ -557,7 +745,11 @@
     if (image && state.imageUrl) {
       const photo = make('img'); photo.src = state.imageUrl; photo.alt = t('fullPhotoAlt'); photo.className = 'case-photo';
       $('case-summary').append(photo);
-    } else $('case-summary').append(make('p', options.archived ? t('noArchivedPhoto') : t('noPrintPhoto'), 'notice warning'));
+    } else if (!synthetic) $('case-summary').append(make('p', options.archived ? t('noArchivedPhoto') : t('noPrintPhoto'), 'notice warning'));
+    $('video-analysis-details').hidden = !synthetic;
+    $('video-analysis-details').setAttribute('aria-label', t('syntheticHistory'));
+    if (synthetic) renderSyntheticDetails($('video-analysis-details'), analysis, videoSource);
+    else $('video-analysis-details').replaceChildren();
     $('case-summary').append(make('p', t('sentContext'), 'measure-label'), make('p', submittedContext || t('noContext'), 'case-context'));
     $('case-summary').append(make('p', t('analysisDate', { date: meta.created_at || t('notAvailable'), method: meta.method_version || meta.prompt_version || t('notSpecified') }), 'case-meta'));
     const decisiveCount = questionList.filter(q => q.critical).length;
@@ -575,14 +767,27 @@
       const card = make('section', null, 'finding ' + risk), top = make('div', null, 'finding-topline');
       top.append(make('span', t('observation', { id: finding.id }), 'finding-id'), make('span', t(riskLabels[risk]), 'risk-tag ' + risk)); card.append(top, make('h3', finding.title));
       const measure = make('div', null, 'measure'); measure.append(make('p', t('whatToDo'), 'measure-label'), make('p', finding.action, 'measure-action'), make('p', t('when', { deadline: finding.deadline || t('deadlineUnknown') }), 'deadline')); card.append(measure);
-      const crop = await createCrop(finding.bbox, image, finding.id);
+      let findingImage = image, sourceUrl = state.imageUrl, stamp = null;
+      if (synthetic) {
+        stamp = Number.isFinite(finding.video_evidence?.timestamp_seconds) ? finding.video_evidence.timestamp_seconds : null;
+        const frameAsset = videoFrameAsset(videoSource, finding.video_evidence);
+        sourceUrl = frameAsset ? frameAsset.download_url : null;
+        if (stamp !== null) card.append(make('p', t('syntheticFrame', { seconds: stamp.toFixed(1) }), 'video-frame-reference'));
+        if (sourceUrl) { findingImage = make('img'); findingImage.src = sourceUrl; try { await findingImage.decode(); } catch { findingImage = null; } }
+      }
+      const crop = await createCrop(finding.bbox, findingImage, finding.id, sourceUrl, stamp);
       if (crop) card.append(crop);
-      else {
+      else if (synthetic) {
+        if (sourceUrl && stamp !== null) {
+          const figure = make('figure', null, 'crop video-finding-frame'), frame = make('img'); frame.src = sourceUrl; frame.alt = t('syntheticFrame', { seconds: stamp.toFixed(1) });
+          const caption = make('figcaption', t('syntheticFrame', { seconds: stamp.toFixed(1) })), link = make('a', t('syntheticOpenFrame')); link.href = sourceUrl; link.target = '_blank'; link.rel = 'noopener'; caption.append(link); figure.append(frame, caption); card.append(figure);
+        } else card.append(make('p', t('syntheticFrameMissing'), 'crop-fallback'));
+      } else {
         const fallback = make('p', t('cropUnavailable', { id: finding.id }), 'crop-fallback');
         if (state.imageUrl) { const link = make('a', t('openFullPhoto')); link.href = state.imageUrl; link.target = '_blank'; link.rel = 'noopener'; fallback.append(link); }
         fallback.append(make('span', image ? t('seeFullPhoto') : t('compareOriginal'), 'print-photo-reference')); card.append(fallback);
       }
-      card.append(make('p', t(certaintyLabels[finding.certainty] || 'verify'), 'evidence-label'), make('p', finding.evidence, 'evidence-text'));
+      card.append(make('p', t(synthetic && finding.certainty === 'visible' ? 'syntheticVisible' : certaintyLabels[finding.certainty] || 'verify'), 'evidence-label'), make('p', finding.evidence, 'evidence-text'));
       addText(card, 'p', finding.exposed_people ? t('exposed', { value: finding.exposed_people }) : '', 'finding-detail');
       addText(card, 'p', finding.question ? t('clarify', { value: finding.question }) : '', 'finding-question');
       const cited = (finding.references || []).map(ref => (analysis.sources || []).find(s => s.id === ref.source_id)).filter(Boolean);
@@ -620,10 +825,12 @@
     const parts = [];
     if (meta.method_version || meta.prompt_version) parts.push(t('method', { value: meta.method_version || meta.prompt_version })); if (meta.model) parts.push(t('model', { value: meta.model })); if (meta.created_at) parts.push(t('analysisMeta', { value: meta.created_at }));
     $('analysis-meta').textContent = parts.join(' · ');
-    ['summary', 'assessment-state', 'case-summary', 'question-summary', 'findings', 'questions', 'print-questions', 'limitations', 'sources', 'analysis-meta'].forEach(id => {
+    ['summary', 'assessment-state', 'case-summary', 'video-analysis-details', 'question-summary', 'findings', 'questions', 'print-questions', 'limitations', 'sources', 'analysis-meta'].forEach(id => {
       const target = document.getElementById(id), content = $(id);
       target.replaceChildren(...content.childNodes); target.className = content.className;
     });
+    document.getElementById('video-analysis-details').hidden = $('video-analysis-details').hidden;
+    document.getElementById('video-analysis-details').setAttribute('aria-label', t('syntheticHistory'));
     document.getElementById('questions-panel').hidden = $('questions-panel').hidden;
     document.getElementById('question-summary').hidden = $('question-summary').hidden;
   }

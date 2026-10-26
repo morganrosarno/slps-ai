@@ -287,3 +287,26 @@ def test_trial_completion_acknowledgement_failure_reports_unknown_without_losing
     assert saved.status_code == 200
     assert saved.json["case"]["analysis"]["meta"]["source_case_id"] == case
     assert limits.provider_request_count() == 3
+
+
+@pytest.mark.parametrize("closed_gate", ["testing", "data", "flag", "adapters", "cap_missing", "cap_zero", "cap_invalid"])
+def test_customer_ui_capability_fails_closed_outside_safe_synthetic_setup(app, closed_gate):
+    if closed_gate == "testing": app.config["TESTING"] = False
+    elif closed_gate == "data": app.config["DATA_MODE"] = "customer"
+    elif closed_gate == "flag": app.config["VIDEO_ANALYSIS_SYNTHETIC_ENABLED"] = False
+    elif closed_gate == "adapters": app.extensions.pop("video_analysis_adapters")
+    elif closed_gate == "cap_missing": app.config["PROVIDER_REQUESTS_TOTAL"] = None
+    elif closed_gate == "cap_zero": app.config["PROVIDER_REQUESTS_TOTAL"] = 0
+    elif closed_gate == "cap_invalid": app.config["PROVIDER_REQUESTS_TOTAL"] = True
+    state = app.test_client().get("/api/session").json
+    assert state["media"]["video_synthetic_analysis_enabled"] is False
+    assert state["media"]["video_analysis_enabled"] is False
+    assert app.extensions["limit_store"].provider_request_count() == 0
+
+
+def test_customer_ui_capability_exposes_only_explicit_safe_test_adapter_not_real_ai(app):
+    state = app.test_client().get("/api/session").json
+    assert state["media"]["video_synthetic_analysis_enabled"] is True
+    assert state["media"]["video_analysis_enabled"] is False
+    assert state["analysis_configured"] is False
+    assert app.extensions["limit_store"].provider_request_count() == 0

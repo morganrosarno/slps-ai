@@ -693,3 +693,211 @@ test('an archived report asks for its photo before answers and preserves questio
   assert.match(f.$('case-summary').textContent, /Contesto originale.*Chiarimenti/s);
   assert.match(f.$('case-summary').textContent, /Il riparo è fisso\?\nRisposta: Sì, fissato/);
 });
+
+
+const videoSourceFixture = () => ({ id: 'video-source', context: 'Synthetic context', analysis: { findings: [], meta: { case_kind: 'video_technical_verification', video_inspection: { validated: true, duration_seconds: 4, frames: [{ timestamp_seconds: 1 }, { timestamp_seconds: 3 }], audio: { status: 'ready_for_transcription' } } } }, assets: [
+  { id: 'original', role: 'original', filename: 'scene.mp4', media_type: 'video/mp4', download_url: '/api/cases/video-source/assets/original' },
+  { id: 'frame-a', role: 'frame', filename: 'frame-01-1.000s.jpg', media_type: 'image/jpeg', download_url: '/api/cases/video-source/assets/frame-a' },
+  { id: 'frame-b', role: 'frame', filename: 'frame-02-3.000s.jpg', media_type: 'image/jpeg', download_url: '/api/cases/video-source/assets/frame-b' },
+] });
+const syntheticVideoFixture = () => ({ summary: 'Synthetic findings only', findings: [{ id: 'frame-1:f1', title: 'Synthetic frame hazard', evidence: 'Seen in this sampled image', action: 'Synthetic action', deadline: 'Before continuing', risk: 'medium', certainty: 'visible', critical_unknown: false, bbox: null, references: [], video_evidence: { timestamp_seconds: 1, asset_id: 'frame-a', basis: 'sampled_frame' } }], questions: [], sources: [], limitations: ['Temporal samples only'], meta: { case_kind: 'video_synthetic_analysis', source_case_id: 'video-source', execution_mode: 'synthetic_adapters', real_ai_analysis_performed: false, coverage: { duration_seconds: 4, frame_count: 2, sampling_method: 'archived_timestamp_samples', frames: [{ timestamp_seconds: 1, asset_id: 'frame-a' }, { timestamp_seconds: 3, asset_id: 'frame-b' }], continuous_video_observed: false, audio_status: 'ready_for_transcription', ambient_sound_analysis_performed: false }, transcription: { status: 'available', basis: 'spoken_claim', text: '<spoken statement>', language: 'it', segments: [{ start_seconds: .2, end_seconds: .8, text: '<spoken statement>', basis: 'spoken_claim' }], ambient_sound_analysis_performed: false } } });
+async function openSyntheticSource(f) {
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/video-source', { case: videoSourceFixture() });
+}
+const sourceListItem = () => ({ id: 'video-source', created_at: 1792920000, kind: 'video_technical_verification', summary: 'Technical video' });
+
+test('synthetic video action is disabled by default and never inferred from real-AI capability', async () => {
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { media: { video_analysis_enabled: true } } });
+  await openSyntheticSource(f);
+  assert.equal(f.$('video-synthetic-controls').hidden, true);
+  f.$('video-analyze-button').click(); await tick(); assert.equal(f.requests.length, 0);
+});
+
+test('synthetic video action explicitly uses one company trial and posts only archived source and context', async () => {
+  const trial = { plan: 'trial', analyses_total: 1, analyses_remaining: 1, export_allowed: false };
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { configured: false, entitlement: trial, media: { video_synthetic_analysis_enabled: true, video_analysis_enabled: false } } });
+  await openSyntheticSource(f);
+  assert.equal(f.$('video-synthetic-controls').hidden, false); assert.match(f.$('video-synthetic-note').textContent, /unica prova aziendale/);
+  f.$('video-analyze-button').click(); await tick();
+  assert.equal(f.$('video-analyze-button').disabled, true); assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].url, '/api/media/cases/video-source/analyze');
+  assert.equal(f.requests[0].options.headers['X-CSRF-Token'], 'test-csrf');
+  assert.deepEqual(JSON.parse(f.requests[0].options.body), { context: 'Synthetic context' });
+  await f.finishRequest('/api/media/cases/video-source/analyze', { analysis: syntheticVideoFixture(), execution_mode: 'synthetic_adapters', real_ai_analysis: false, trial_consumed: true, entitlement: { ...trial, analyses_remaining: 0 }, archive: { saved: true, case_id: 'video-result' } });
+  await f.finishRequest('/api/cases/video-source', { case: videoSourceFixture() });
+  assert.equal(f.$('report').hidden, false); assert.match(f.$('report-notice').textContent, /non è un’analisi AI reale/);
+  assert.match(f.$('video-analysis-details').textContent, /2 fotogrammi su 4.0 secondi/);
+  assert.match(f.$('video-analysis-details').textContent, /Parlato dichiarato/); assert.match(f.$('video-analysis-details').textContent, /0.2–0.8 s/);
+  assert.match(f.$('video-analysis-details').textContent, /<spoken statement>/);
+  assert.equal(f.$('findings').querySelector('img').src, '/api/cases/video-source/assets/frame-a');
+  assert.match(f.$('findings').textContent, /campionato a 1.0 s/); assert.doesNotMatch(f.$('findings').textContent, /foto completa/);
+  assert.equal(f.$('reanalyse-button').hidden, true); assert.equal(f.$('edit-analysis').hidden, true); assert.equal(f.$('print-report').hidden, true);
+  assert.equal(f.$('analyse-button').disabled, true); assert.equal(f.doc.activeElement.id, 'report-title');
+});
+
+test('saved synthetic report opens without a mutation and states missing original evidence truthfully', async () => {
+  const saved = { id: 'video-result', kind: 'video_synthetic_analysis', created_at: 1792920000, summary: 'Synthetic report' };
+  const f = await fixture({ initialCases: [saved] });
+  assert.match(f.$('history-list').textContent, /nessuna analisi AI reale/);
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/video-result', { case: { ...saved, analysis: syntheticVideoFixture(), context: 'Synthetic context', assets: [] } });
+  await f.finishRequest('/api/cases/video-source', { error: { code: 'case_not_found', message: 'Missing' } }, 404);
+  assert.equal(f.$('report').hidden, false); assert.match(f.$('video-analysis-details').textContent, /caso sorgente.*non sono disponibili/);
+  assert.match(f.$('findings').textContent, /fotogramma associato.*non è disponibile/);
+  assert.equal(f.$('findings').querySelector('img'), null); assert.equal(f.requests.length, 0);
+});
+
+test('quota completion unknown preserves recoverable report and blocks further mutation without retry encouragement', async () => {
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { media: { video_synthetic_analysis_enabled: true } } });
+  await openSyntheticSource(f); f.$('video-analyze-button').click(); await tick();
+  await f.finishRequest('/api/media/cases/video-source/analyze', { error: { code: 'trial_completion_unknown', message: 'Do not trust raw text' }, trial_consumed: null, archive: { saved: true, case_id: 'uncertain-result' } }, 503);
+  assert.match(f.$('video-synthetic-status').textContent, /non avviare altre analisi/i); assert.doesNotMatch(f.$('video-synthetic-status').textContent, /riprova/i);
+  assert.equal(f.$('video-synthetic-controls').hidden, true); assert.equal(f.$('video-open-saved-result').hidden, false);
+  f.$('video-analyze-button').click(); await tick(); f.photo(); await f.submit(); assert.equal(f.requests.length, 0);
+  assert.equal(f.$('analyse-button').disabled, true); assert.match(f.$('status').textContent, /conteggio/);
+});
+
+test('known consumed trial remains consumed when entitlement refresh is unavailable', async () => {
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { media: { video_synthetic_analysis_enabled: true } } });
+  await openSyntheticSource(f); f.$('video-analyze-button').click(); await tick();
+  await f.finishRequest('/api/media/cases/video-source/analyze', { analysis: syntheticVideoFixture(), execution_mode: 'synthetic_adapters', real_ai_analysis: false, trial_consumed: true, entitlement: null, entitlement_status: { available: false }, archive: { saved: true, case_id: 'video-result' } });
+  await f.finishRequest('/api/cases/video-source', { case: videoSourceFixture() });
+  assert.match(f.$('report-notice').textContent, /prova aziendale utilizzata/); assert.equal(f.$('analyse-button').disabled, true);
+  f.$('video-analyze-button').click(); await tick(); assert.equal(f.requests.length, 0);
+});
+
+test('all four locales disclose synthetic output, partial video coverage and spoken claims', async () => {
+  for (const locale of ['it', 'de', 'fr', 'en']) {
+    const f = await fixture({ initialLocale: locale, initialCases: [{ id: 'result', kind: 'video_synthetic_analysis', summary: 'Synthetic' }] });
+    f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+    const analysis = syntheticVideoFixture(); analysis.meta.transcription = { status: 'unintelligible', basis: 'spoken_claim', language: null, text: null, ambient_sound_analysis_performed: false, segments: [] };
+    await f.finishRequest('/api/cases/result', { case: { id: 'result', analysis } });
+    await f.finishRequest('/api/cases/video-source', { error: { code: 'case_not_found' } }, 404);
+    assert.match(f.$('report-notice').textContent, /sintetico|synthetisch|synthétique|synthetic/i);
+    assert.ok(f.$('video-analysis-details').textContent.includes(f.i18n.messages[locale].syntheticTranscriptUnknown));
+    assert.ok(f.$('video-analysis-details').textContent.includes(f.i18n.messages[locale].syntheticNoAmbient));
+    assert.equal(f.requests.length, 0);
+  }
+});
+
+
+test('uncertain quota recovery opens the saved report using GET only and keeps mutation locked', async () => {
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { media: { video_synthetic_analysis_enabled: true } } });
+  await openSyntheticSource(f); f.$('video-analyze-button').click(); await tick();
+  await f.finishRequest('/api/media/cases/video-source/analyze', { error: { code: 'trial_completion_unknown' }, trial_consumed: null, archive: { saved: true, case_id: 'uncertain-result' } }, 503);
+  f.$('video-open-saved-result').click(); await tick();
+  assert.equal(f.requests[0].options.method, undefined);
+  await f.finishRequest('/api/cases/uncertain-result', { case: { id: 'uncertain-result', analysis: syntheticVideoFixture() } });
+  await f.finishRequest('/api/cases/video-source', { case: videoSourceFixture() });
+  assert.equal(f.$('report').hidden, false); assert.match(f.$('report-notice').textContent, /non avviare altre analisi/i);
+  assert.equal(f.$('analyse-button').disabled, true); assert.equal(f.requests.length, 0);
+});
+
+test('sampled finding cannot borrow an asset or timestamp outside its coverage contract', async () => {
+  const f = await fixture({ initialCases: [{ id: 'bad-result', kind: 'video_synthetic_analysis', summary: 'Synthetic' }] });
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  const analysis = syntheticVideoFixture(); analysis.findings[0].video_evidence.timestamp_seconds = 2;
+  await f.finishRequest('/api/cases/bad-result', { case: { id: 'bad-result', analysis } });
+  assert.equal(f.$('report').hidden, true); assert.equal(f.$('history-error').hidden, false); assert.equal(f.requests.length, 0);
+});
+
+test('saved frame references never load cross-origin or unrelated asset URLs', async () => {
+  const f = await fixture({ initialCases: [{ id: 'result', kind: 'video_synthetic_analysis', summary: 'Synthetic' }] });
+  f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+  await f.finishRequest('/api/cases/result', { case: { id: 'result', analysis: syntheticVideoFixture() } });
+  const source = videoSourceFixture(); source.assets[1].download_url = 'https://unexpected.example/frame.jpg';
+  await f.finishRequest('/api/cases/video-source', { case: source });
+  assert.equal(f.$('findings').querySelector('img'), null); assert.match(f.$('findings').textContent, /non è disponibile/);
+  assert.equal(f.$('video-analysis-details').querySelectorAll('img').length, 1);
+});
+
+
+test('exhausted company trial cannot run the synthetic action despite an available capability', async () => {
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { entitlement: { plan: 'trial', analyses_remaining: 0, export_allowed: false }, media: { video_synthetic_analysis_enabled: true } } });
+  await openSyntheticSource(f); assert.equal(f.$('video-synthetic-controls').hidden, true);
+  f.$('video-analyze-button').click(); await tick(); assert.equal(f.requests.length, 0);
+});
+
+
+const invalidSyntheticContracts = [
+  ['coverage ambient audio inference', a => { a.meta.coverage.ambient_sound_analysis_performed = true; }],
+  ['missing coverage ambient audio declaration', a => { delete a.meta.coverage.ambient_sound_analysis_performed; }],
+  ['transcription ambient audio inference', a => { a.meta.transcription.ambient_sound_analysis_performed = true; }],
+  ['missing transcription ambient audio declaration', a => { delete a.meta.transcription.ambient_sound_analysis_performed; }],
+  ['unrecognised transcription status', a => { a.meta.transcription.status = 'not_performed'; }],
+  ['transcription basis promoted to visual proof', a => { a.meta.transcription.basis = 'sampled_frame'; }],
+  ['segment basis promoted to visual proof', a => { a.meta.transcription.segments[0].basis = 'visual_evidence'; }],
+  ['negative segment start', a => { a.meta.transcription.segments[0].start_seconds = -.1; }],
+  ['segment end beyond video duration', a => { a.meta.transcription.segments[0].end_seconds = 4.1; }],
+  ['segment end before its start', a => { a.meta.transcription.segments[0].end_seconds = .1; }],
+  ['segment text inconsistent with combined transcript', a => { a.meta.transcription.text = 'another statement'; }],
+  ['segment times out of order', a => { a.meta.transcription.segments.push({ start_seconds: .1, end_seconds: .15, text: 'earlier', basis: 'spoken_claim' }); a.meta.transcription.text += ' earlier'; }],
+  ['speech transcript despite absent audio', a => { a.meta.coverage.audio_status = 'absent'; }],
+  ['not applicable transcript despite present speech', a => { a.meta.transcription = { status: 'not_applicable', reason: 'silent', language: null, text: null, segments: [], basis: 'spoken_claim', ambient_sound_analysis_performed: false }; }],
+  ['unintelligible status retaining alleged speech', a => { a.meta.transcription.status = 'unintelligible'; }],
+  ['unknown audio status', a => { a.meta.coverage.audio_status = 'error'; }],
+  ['visible finding with reported evidence basis', a => { a.findings[0].video_evidence.basis = 'reported'; }],
+  ['reported finding promoted to sampled visual basis', a => { a.findings[0].certainty = 'reported'; }],
+  ['duplicate frame asset IDs', a => { a.meta.coverage.frames[1].asset_id = 'frame-a'; }],
+  ['duplicate frame timestamps', a => { a.meta.coverage.frames[1].timestamp_seconds = 1; }],
+  ['out of order coverage', a => { a.meta.coverage.frames.reverse(); }],
+  ['frame beyond video duration', a => { a.meta.coverage.frames[1].timestamp_seconds = 4.1; }],
+  ['negative frame timestamp', a => { a.meta.coverage.frames[0].timestamp_seconds = -1; }],
+  ['non-finite frame timestamp', a => { a.meta.coverage.frames[1].timestamp_seconds = Infinity; }],
+  ['unrecognised sampling method', a => { a.meta.coverage.sampling_method = 'continuous'; }],
+  ['frame count inconsistent with samples', a => { a.meta.coverage.frame_count = 3; }],
+  ['duration beyond the backend maximum', a => { a.meta.coverage.duration_seconds = 3601; }],
+  ['finding identifier inconsistent with sampled frame', a => { a.findings[0].id = 'frame-2:f1'; }],
+];
+for (const [name, corrupt] of invalidSyntheticContracts) {
+  test('synthetic contract rejects ' + name + ' before rendering or source fetch', async () => {
+    const f = await fixture({ initialCases: [{ id: 'invalid-result', kind: 'video_synthetic_analysis', summary: 'Synthetic' }] });
+    f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+    const analysis = syntheticVideoFixture(); corrupt(analysis);
+    await f.finishRequest('/api/cases/invalid-result', { case: { id: 'invalid-result', analysis } });
+    assert.equal(f.$('report').hidden, true); assert.equal(f.$('video-analysis-details').hidden, true);
+    assert.equal(f.$('history-error').hidden, false); assert.equal(f.$('history-error').textContent.length > 0, true);
+    assert.equal(f.requests.length, 0, 'invalid provenance must not fetch or display a source');
+  });
+}
+
+for (const certainty of ['visible', 'reported', 'verify']) {
+  test('synthetic finding accepts only the matching backend provenance for ' + certainty, async () => {
+    const f = await fixture({ initialCases: [{ id: 'valid-result', kind: 'video_synthetic_analysis', summary: 'Synthetic' }] });
+    f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+    const analysis = syntheticVideoFixture(); analysis.findings[0].certainty = certainty;
+    analysis.findings[0].video_evidence.basis = certainty === 'visible' ? 'sampled_frame' : certainty;
+    await f.finishRequest('/api/cases/valid-result', { case: { id: 'valid-result', analysis } });
+    await f.finishRequest('/api/cases/video-source', { error: { code: 'case_not_found' } }, 404);
+    assert.equal(f.$('report').hidden, false); assert.equal(f.$('findings').querySelectorAll('section').length, 1);
+  });
+}
+
+for (const audioStatus of ['absent', 'silent']) {
+  test('synthetic transcript not-applicable is accepted only with matching ' + audioStatus + ' audio', async () => {
+    const f = await fixture({ initialCases: [{ id: 'valid-result', kind: 'video_synthetic_analysis', summary: 'Synthetic' }] });
+    f.$('history-list').querySelectorAll('button')[0].click(); await tick();
+    const analysis = syntheticVideoFixture(); analysis.meta.coverage.audio_status = audioStatus;
+    analysis.meta.transcription = { status: 'not_applicable', reason: audioStatus, language: null, text: null, segments: [], basis: 'spoken_claim', ambient_sound_analysis_performed: false };
+    await f.finishRequest('/api/cases/valid-result', { case: { id: 'valid-result', analysis } });
+    await f.finishRequest('/api/cases/video-source', { error: { code: 'case_not_found' } }, 404);
+    assert.equal(f.$('report').hidden, false); assert.match(f.$('video-analysis-details').textContent, /Trascrizione non applicabile/);
+  });
+}
+
+test('invalid synthetic response after committed trial does not render or suggest a fresh trial', async () => {
+  const f = await fixture({ initialCases: [sourceListItem()], sessionData: { media: { video_synthetic_analysis_enabled: true } } });
+  await openSyntheticSource(f); f.$('video-analyze-button').click(); await tick();
+  const analysis = syntheticVideoFixture(); analysis.meta.coverage.ambient_sound_analysis_performed = true;
+  await f.finishRequest('/api/media/cases/video-source/analyze', { analysis, execution_mode: 'synthetic_adapters', real_ai_analysis: false, trial_consumed: true, archive: { saved: true, case_id: 'stored-invalid-result' } });
+  assert.equal(f.$('report').hidden, true); assert.equal(f.$('analyse-button').disabled, true);
+  assert.match(f.$('video-synthetic-status').textContent, /rapporto è stato salvato e la prova utilizzata/i);
+  assert.equal(f.requests.length, 0, 'invalid result must not fetch its source');
+  f.$('video-open-saved-result').click(); await tick();
+  await f.finishRequest('/api/cases/stored-invalid-result', { case: { id: 'stored-invalid-result', analysis } });
+  assert.equal(f.$('report').hidden, true); assert.equal(f.$('analyse-button').disabled, true);
+  assert.match(f.$('video-synthetic-status').textContent, /rapporto è stato salvato e la prova utilizzata/i);
+  assert.doesNotMatch(f.$('video-synthetic-status').textContent, /utilizzo della prova non è confermato/i);
+  assert.equal(f.requests.length, 0);
+});

@@ -1019,6 +1019,13 @@ def create_app(test_config=None):
 
     def media_capabilities():
         local_video_tools = media_tools_available()
+        synthetic_cap = provider_request_limit()
+        synthetic_video_ui = bool(
+            app.testing is True and app.config["DATA_MODE"] == "synthetic"
+            and app.config["VIDEO_ANALYSIS_SYNTHETIC_ENABLED"] is True
+            and isinstance(app.extensions.get("video_analysis_adapters"), SyntheticVideoAdapters)
+            and synthetic_cap is not None and synthetic_cap > 0
+        )
         return {
             "image_max_bytes": app.config["MAX_IMAGE_BYTES"],
             "video_max_bytes": app.config["MAX_VIDEO_BYTES"],
@@ -1026,6 +1033,7 @@ def create_app(test_config=None):
             "video_intake_enabled": local_video_tools,
             "audio_extraction_enabled": local_video_tools,
             "video_analysis_enabled": False,
+            "video_synthetic_analysis_enabled": synthetic_video_ui,
         }
 
     def session_payload(authenticated, csrf, ready):
