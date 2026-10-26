@@ -23,6 +23,9 @@ from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
 from accounts import (AccountConflict, AccountStore, BillingSandboxConflict,
                       ConsultationConflict, billing_catalog, normalize_email)
 from media import MediaError, inspect_video, media_tools_available
+from storage_contracts import (LocalBlobStore, SQLiteMigration,
+                               apply_sqlite_migrations, migration_versions,
+                               require_durable_storage)
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -58,25 +61,48 @@ class MemoryUploadRequest(Request):
         return io.BytesIO()
 
 
+def _migrate_limit_events_v1(db):
+    db.execute("CREATE TABLE IF NOT EXISTS events (kind TEXT, scope TEXT, created REAL)")
+    db.execute("CREATE INDEX IF NOT EXISTS events_lookup ON events(kind,scope,created)")
+    db.execute("CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, token TEXT, expires REAL)")
+
+
+def _migrate_trial_usage_v1(db):
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS trial_usage (scope TEXT PRIMARY KEY, used INTEGER NOT NULL)"
+    )
+
+
+def _migrate_trial_clarifications_v1(db):
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS trial_clarifications (scope TEXT PRIMARY KEY, used INTEGER NOT NULL)"
+    )
+
+
+LIMIT_MIGRATIONS = (
+    SQLiteMigration(1, "limit_events_and_leases_v1", hashlib.sha256(b"limit-events-leases-v1-20261026").hexdigest(), _migrate_limit_events_v1),
+    SQLiteMigration(2, "trial_usage_v1", hashlib.sha256(b"trial-usage-v1-20261026").hexdigest(), _migrate_trial_usage_v1),
+    SQLiteMigration(3, "trial_clarifications_v1", hashlib.sha256(b"trial-clarifications-v1-20261026").hexdigest(), _migrate_trial_clarifications_v1),
+)
+
+
 class LimitStore:
     """Atomic limits shared by workers on one server, retained on restart."""
+    durable = False
+
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.connect() as db:
-            db.execute("CREATE TABLE IF NOT EXISTS events (kind TEXT, scope TEXT, created REAL)")
-            db.execute("CREATE INDEX IF NOT EXISTS events_lookup ON events(kind, scope, created)")
-            db.execute("CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, token TEXT, expires REAL)")
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS trial_usage (scope TEXT PRIMARY KEY, used INTEGER NOT NULL)"
-            )
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS trial_clarifications (scope TEXT PRIMARY KEY, used INTEGER NOT NULL)"
-            )
+            apply_sqlite_migrations(db, "limits", LIMIT_MIGRATIONS)
         try:
             self.path.chmod(0o600)
         except OSError:
             pass
+
+    def schema_versions(self):
+        with self.connect() as db:
+            return migration_versions(db, "limits")
 
     @contextmanager
     def connect(self):
@@ -238,6 +264,53 @@ class LimitStore:
             db.execute("DELETE FROM leases WHERE name=? AND token=?", (name, token))
 
 
+def _migrate_cases_v1(db):
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS cases (
+               id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+               created REAL NOT NULL, context TEXT NOT NULL,
+               analysis_json TEXT NOT NULL, image_sha256 TEXT)"""
+    )
+    # Positional access keeps migrations independent of connection row_factory.
+    columns = {row[1] for row in db.execute("PRAGMA table_info(cases)")}
+    if "image_sha256" not in columns:
+        db.execute("ALTER TABLE cases ADD COLUMN image_sha256 TEXT")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS cases_owner_created ON cases(tenant_id,owner_id,created DESC)"
+    )
+
+
+def _migrate_case_assets_v1(db):
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS case_assets (
+               id TEXT PRIMARY KEY, case_id TEXT NOT NULL,
+               tenant_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+               role TEXT NOT NULL, filename TEXT NOT NULL, media_type TEXT NOT NULL,
+               byte_size INTEGER NOT NULL CHECK(byte_size >= 0),
+               sha256 TEXT NOT NULL, relative_path TEXT NOT NULL UNIQUE,
+               created REAL NOT NULL,
+               FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE)"""
+    )
+    db.execute(
+        """CREATE INDEX IF NOT EXISTS assets_scope_case
+           ON case_assets(tenant_id,owner_id,case_id,created)"""
+    )
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS case_deletions (
+               case_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+               owner_id TEXT NOT NULL, trash_relative_path TEXT NOT NULL UNIQUE,
+               requested REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+               last_error REAL,
+               FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE)"""
+    )
+
+
+CASE_MIGRATIONS = (
+    SQLiteMigration(1, "case_archive_v1", hashlib.sha256(b"case-archive-v1-20261026").hexdigest(), _migrate_cases_v1),
+    SQLiteMigration(2, "case_assets_v1", hashlib.sha256(b"case-assets-v1-20261026").hexdigest(), _migrate_case_assets_v1),
+)
+
+
 class CaseStore:
     """Private case archive with file assets scoped by tenant and owner.
 
@@ -246,76 +319,27 @@ class CaseStore:
     currently authorizes the same owner-private view used by the existing case
     routes; tenant scoping also makes cross-company access fail closed.
     """
+    durable = False
+
     def __init__(self, path, media_root=None, max_history_bytes=DEFAULT_MAX_HISTORY_BYTES):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.media_root = Path(media_root or (self.path.parent / "history-media"))
-        self.media_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        (self.media_root / ".staging").mkdir(exist_ok=True, mode=0o700)
-        (self.media_root / ".trash").mkdir(exist_ok=True, mode=0o700)
-        for directory in (self.media_root, self.media_root / ".staging", self.media_root / ".trash"):
-            try:
-                directory.chmod(0o700)
-            except OSError:
-                pass
+        self.blob_store = LocalBlobStore(self.media_root)
+        self.media_root = self.blob_store.root
         self.max_history_bytes = int(max_history_bytes)
         if self.max_history_bytes < 1:
             raise ValueError("History capacity must be positive")
         with self.connect() as db:
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS cases (
-                    id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    created REAL NOT NULL,
-                    context TEXT NOT NULL,
-                    analysis_json TEXT NOT NULL,
-                    image_sha256 TEXT
-                )"""
-            )
-            columns = {row[1] for row in db.execute("PRAGMA table_info(cases)").fetchall()}
-            if "image_sha256" not in columns:
-                db.execute("ALTER TABLE cases ADD COLUMN image_sha256 TEXT")
-            db.execute(
-                "CREATE INDEX IF NOT EXISTS cases_owner_created "
-                "ON cases(tenant_id, owner_id, created DESC)"
-            )
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS case_assets (
-                    id TEXT PRIMARY KEY,
-                    case_id TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    filename TEXT NOT NULL,
-                    media_type TEXT NOT NULL,
-                    byte_size INTEGER NOT NULL CHECK(byte_size >= 0),
-                    sha256 TEXT NOT NULL,
-                    relative_path TEXT NOT NULL UNIQUE,
-                    created REAL NOT NULL,
-                    FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
-                )"""
-            )
-            db.execute(
-                "CREATE INDEX IF NOT EXISTS assets_scope_case "
-                "ON case_assets(tenant_id, owner_id, case_id, created)"
-            )
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS case_deletions (
-                    case_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    trash_relative_path TEXT NOT NULL UNIQUE,
-                    requested REAL NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    last_error REAL,
-                    FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
-                )"""
-            )
+            apply_sqlite_migrations(db, "cases", CASE_MIGRATIONS)
         try:
             self.path.chmod(0o600)
         except OSError:
             pass
+
+    def schema_versions(self):
+        with self.connect() as db:
+            return migration_versions(db, "cases")
 
     @contextmanager
     def connect(self):
@@ -343,19 +367,10 @@ class CaseStore:
         return bytes(data), asset["role"], filename, media_type
 
     def _safe_path(self, relative_path):
-        target = (self.media_root / relative_path).resolve()
-        root = self.media_root.resolve()
-        if target == root or root not in target.parents:
-            raise OSError("Unsafe history path")
-        return target
+        return self.blob_store.resolve(relative_path)
 
-    @staticmethod
-    def _write_private(path, data):
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
+    def _write_private(self, path, data):
+        return self.blob_store.write(Path(path).relative_to(self.media_root), data)
 
     def create(self, tenant_id, owner_id, context, analysis, image_sha256, max_cases, assets=None):
         encoded = json.dumps(analysis, ensure_ascii=False, separators=(",", ":"))
@@ -365,8 +380,8 @@ class CaseStore:
         case_id = secrets.token_urlsafe(18)
         prepared = []
         total_new_bytes = 0
-        stage = self.media_root / ".staging" / secrets.token_urlsafe(18)
-        stage.mkdir(mode=0o700)
+        stage_relative = Path(".staging") / secrets.token_urlsafe(18)
+        stage = self.blob_store.make_dir(stage_relative)
         final_relative = Path("cases") / case_id
         final = self._safe_path(final_relative)
         try:
@@ -412,13 +427,12 @@ class CaseStore:
                          asset["filename"], asset["media_type"], asset["byte_size"],
                          asset["sha256"], asset["relative_path"], now),
                     )
-                final.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                os.replace(stage, final)
+                self.blob_store.replace(stage_relative, final_relative)
         except Exception:
-            shutil.rmtree(final, ignore_errors=True)
+            self.blob_store.remove_tree(final_relative)
             raise
         finally:
-            shutil.rmtree(stage, ignore_errors=True)
+            self.blob_store.remove_tree(stage_relative)
         return case_id, None
 
     @staticmethod
@@ -578,9 +592,9 @@ class CaseStore:
             if final.exists() and trash.exists():
                 raise OSError("History deletion paths are inconsistent")
             if final.exists():
-                os.replace(final, trash)
+                self.blob_store.replace(Path("cases") / case_id, trash_path)
             if trash.exists():
-                shutil.rmtree(trash)
+                self.blob_store.remove_tree(trash_path)
         except OSError as exc:
             with self.connect() as db:
                 db.execute(
@@ -744,6 +758,7 @@ def create_app(test_config=None):
         SECRET_KEY=os.getenv("SLPS_SESSION_SECRET"),
         PILOT_PASSWORD=os.getenv("SLPS_PILOT_PASSWORD"),
         AUTH_MODE=os.getenv("SLPS_AUTH_MODE", "pilot"),
+        DATA_MODE=os.getenv("SLPS_DATA_MODE", "synthetic"),
         ACCOUNT_REGISTRATION_OPEN=os.getenv("SLPS_ACCOUNT_REGISTRATION_OPEN", "false").lower() == "true",
         BILLING_SANDBOX_ENABLED=os.getenv("SLPS_BILLING_SANDBOX_ENABLED", "false").lower() == "true",
         BILLING_SANDBOX_MAX_OPEN_INTENTS=int(os.getenv("SLPS_BILLING_SANDBOX_MAX_OPEN_INTENTS", "5")),
@@ -776,6 +791,11 @@ def create_app(test_config=None):
         app.config.update(test_config)
     if not app.config.get("HISTORY_ROOT"):
         app.config["HISTORY_ROOT"] = str(Path(app.config["CASE_DB_PATH"]).parent / "history-media")
+    # This check must happen before constructors create SQLite files or media
+    # directories.  Current adapters are only certified for synthetic data.
+    require_durable_storage(
+        app.config["DATA_MODE"], AccountStore, LimitStore, CaseStore, LocalBlobStore
+    )
     app.config["MAX_CONTENT_LENGTH"] = max(
         app.config["MAX_IMAGE_BYTES"], app.config["MAX_VIDEO_BYTES"]
     ) + 128 * 1024
@@ -789,6 +809,11 @@ def create_app(test_config=None):
     app.extensions["case_store"] = case_store
     accounts = AccountStore(app.config["ACCOUNT_DB_PATH"]) if app.config["AUTH_MODE"] == "accounts" else None
     app.extensions["account_store"] = accounts
+    # Explicit application-facing persistence ports.  The current local
+    # adapter implements both contracts; future durable adapters can replace
+    # it without changing route code.
+    app.extensions["account_identity_port"] = accounts
+    app.extensions["billing_sandbox_port"] = accounts
 
     def account_mode():
         return app.config["AUTH_MODE"] == "accounts"

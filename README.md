@@ -53,6 +53,12 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 ## Avvio locale
 Python 3.12, `ffmpeg` e `ffprobe` sono richiesti e verificati durante lo sviluppo.
 
+Gli adapter inclusi usano SQLite e filesystem locale e sono abilitati soltanto
+con `SLPS_DATA_MODE=synthetic` (default). `SLPS_DATA_MODE=real` fallisce prima
+di creare database o cartelle: per dati reali servono adapter durevoli ancora
+da scegliere e collaudare. Le migrazioni SQLite sono versionate e verificano
+nome e checksum, ma questa tracciabilità non rende durevole lo storage locale.
+
 1. Crea un ambiente virtuale e installa requirements.txt.
 2. Configura le variabili descritte in .env.example nell'ambiente del processo.
    Il file .env non viene letto automaticamente.

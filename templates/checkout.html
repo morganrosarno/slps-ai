@@ -14,7 +14,7 @@
   <a class="skip-link" href="#main" data-i18n="skip">Vai al contenuto</a>
   <header class="checkout-header">
     <a class="brand" href="/account" aria-label="SLPS AI"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 36" fill="none"><path d="m16 2 13 5v11c0 8-9 14-13 16C12 32 3 26 3 18V7Z" stroke="currentColor" stroke-width="2"/><path d="m10 18 4 4 9-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>SLPS <strong>AI</strong></span></a>
-    <div class="header-actions"><a class="back-link" href="/account" data-i18n="backAccount">← Account</a><label class="sr-only" for="checkout-language" data-i18n="language">Lingua</label><select id="checkout-language" aria-label="Lingua"><option value="it" lang="it">Italiano</option><option value="de" lang="de">Deutsch</option><option value="fr" lang="fr">Français</option><option value="en" lang="en">English</option></select></div>
+    <div class="header-actions"><a class="back-link" href="/account" data-i18n="backAccount">← Account</a><label class="sr-only" for="checkout-language" data-i18n="language">Lingua</label><select id="checkout-language" aria-label="Lingua" data-i18n-aria-label="language"><option value="it" lang="it">Italiano</option><option value="de" lang="de">Deutsch</option><option value="fr" lang="fr">Français</option><option value="en" lang="en">English</option></select></div>
   </header>
 
   <main id="main" class="checkout-main">
@@ -25,7 +25,7 @@
 
     <div id="checkout-notice" class="notice" role="alert" aria-live="assertive" tabindex="-1" hidden></div>
     <div id="checkout-loading" class="loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loading">Caricamento della simulazione…</span></div>
-    <section id="checkout-unavailable" class="empty-panel" hidden><h2 data-i18n="unavailableTitle">Simulazione non disponibile</h2><p data-i18n="unavailableCopy">Torna al tuo account e verifica lo stato dell'accesso.</p><a class="button secondary" href="/account" data-i18n="backAccount">← Account</a></section>
+    <section id="checkout-unavailable" class="empty-panel" hidden><h2 data-i18n="unavailableTitle">Simulazione non disponibile</h2><p data-i18n="unavailableCopy">Torna al tuo account e verifica lo stato dell'accesso.</p><div class="empty-actions"><button id="checkout-retry" class="button primary" type="button" data-i18n="retry" hidden>Riprova caricamento</button><a class="button secondary" href="/account" data-i18n="backAccount">← Account</a></div></section>
 
     <section id="checkout-chooser" class="chooser" aria-labelledby="plans-title" hidden>
       <div class="section-heading"><div><p class="step" data-i18n="stepOne">Passaggio 1 di 2</p><h2 id="plans-title" tabindex="-1" data-i18n="plansTitle">Scegli una proposta da simulare</h2></div><p class="draft-note" data-i18n="draftNote">Nomi commerciali, prezzi, IVA, quote e vantaggi sono ancora da definire.</p></div>

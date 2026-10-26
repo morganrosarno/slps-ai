@@ -5,6 +5,33 @@ locali sono quindi adatti soltanto a test sintetici: un deploy, riavvio o cambio
 istanza può eliminarli. Il checkout sandbox non cambia questo limite e non deve
 essere usato come prova di persistenza produttiva.
 
+Il servizio dichiara questa separazione con `SLPS_DATA_MODE`: `synthetic` è il
+default e conserva il comportamento del pilota, mentre `real` si arresta prima
+di costruire database o cartelle locali. Anche il preflight segnala il blocco.
+La rimozione richiederà adapter durevoli che implementino gli stessi contratti
+applicativi e prove di ripristino; il solo uso di un percorso persistente non è
+considerato certificazione sufficiente.
+
+## Contratti e migrazioni locali
+
+- `AccountIdentityPort` e `BillingSandboxPort` separano identità e checkout
+  simulato, pur usando oggi la stessa istanza `AccountStore` e lo stesso SQLite.
+- `CaseArchivePort` usa `BlobStore`; `LocalBlobStore` confina scritture,
+  sostituzioni e cancellazioni nella cartella privata configurata.
+- Ogni database locale, incluso quello dei limiti e delle lease, mantiene
+  `schema_migrations(namespace, version, name,
+  checksum, applied_at)`. Ogni versione usa una transazione `BEGIN IMMEDIATE` e
+  registra la versione nella stessa transazione della modifica. Versioni future
+  sconosciute o checksum diversi bloccano l'avvio.
+- I database storici vengono riconciliati da migrazioni idempotenti prima di
+  registrare le rispettive versioni, senza cancellare record esistenti.
+
+Questi contratti non risolvono ancora la durabilità: account e checkout
+condividono un file SQLite; `LocalBlobStore` usa rinomina atomica locale e non è
+un object store; download e backup rimangono legati a `Path`, `send_file` e al
+filesystem locale. La migrazione verso provider esterni richiederà adapter e
+contract test dedicati, senza riutilizzare tali assunzioni locali.
+
 ## Confine di lancio
 
 Prima di acquisire dati reali occorre scegliere e verificare:

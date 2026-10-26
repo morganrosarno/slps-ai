@@ -108,6 +108,24 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
     env = dict(os.environ if env is None else env)
     results: list[Check] = []
 
+    data_mode = env.get("SLPS_DATA_MODE", "synthetic").strip().lower()
+    results.append(check(
+        "data_mode", data_mode in {"synthetic", "real"},
+        f"Modalità dati valida: {data_mode if data_mode in {'synthetic', 'real'} else 'non valida'}.",
+        "SLPS_DATA_MODE deve essere synthetic oppure real.",
+    ))
+    if data_mode == "real":
+        results.append(Check(
+            "real_data_storage", "blocker", "blocker",
+            "Dati reali bloccati: gli adapter SQLite e filesystem locali non sono certificati durevoli. Configura e collauda adapter durevoli prima dell'avvio.",
+        ))
+    else:
+        results.append(check(
+            "real_data_storage", True,
+            "Modalità sintetica: gli adapter locali non sono autorizzati a contenere dati reali.",
+            "",
+        ))
+
     auth_mode = env.get("SLPS_AUTH_MODE", "pilot")
     auth_mode_valid = isinstance(auth_mode, str) and auth_mode in {"pilot", "accounts"}
     results.append(check("auth_mode", auth_mode_valid,

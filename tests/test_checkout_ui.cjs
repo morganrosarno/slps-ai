@@ -15,9 +15,10 @@ function element(id, i18n = null) {
 function harness(responses=[], language='it-CH') {
   const nodes=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(match=>[match[1],element(match[1])]));
   const translated=[...html.matchAll(/data-i18n="([^"]+)"/g)].map((match,index)=>element('translated-'+index,match[1]));
+  nodes['checkout-language'].attributes['data-i18n-aria-label']='language';
   const cycles=[element('cycle-monthly'),element('cycle-annual')]; Object.assign(cycles[0],{name:'billing-cycle',value:'monthly',checked:true}); Object.assign(cycles[1],{name:'billing-cycle',value:'annual'});
   const saved=new Map(), requests=[];
-  const document={title:'',documentElement:{lang:'it'},getElementById:id=>{assert.ok(nodes[id],'Known element '+id);return nodes[id];},querySelectorAll:selector=>selector==='[data-i18n]'?translated:selector==='input[name="billing-cycle"]'?cycles:[],createElement:tag=>element(tag)};
+  const document={title:'',documentElement:{lang:'it'},getElementById:id=>{assert.ok(nodes[id],'Known element '+id);return nodes[id];},querySelectorAll:selector=>selector==='[data-i18n]'?translated:selector==='[data-i18n-aria-label]'?[nodes['checkout-language']]:selector==='input[name="billing-cycle"]'?cycles:[],createElement:tag=>element(tag)};
   const window={navigator:{language},localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value)},crypto:{getRandomValues(array){array[0]=11;array[1]=22;array[2]=33;return array;}}};
   async function fetcher(url,options){requests.push({url,options});const response=responses.shift();if(response instanceof Error)throw response;assert.ok(response,'fixture for '+url);if(typeof response==='function')return response(url,options);return{ok:(response.status||200)<400,status:response.status||200,json:async()=>response.data};}
   const controller=ui.createController(document,window,fetcher);
@@ -34,6 +35,7 @@ test('checkout copy is complete in four languages and the page has explicit non-
   assert.deepEqual(ui.locales.sort(),['de','en','fr','it']);const keys=Object.keys(ui.dictionaries.it).sort();
   for(const language of ui.locales){assert.deepEqual(Object.keys(ui.dictionaries[language]).sort(),keys);for(const key of keys)assert.ok(ui.dictionaries[language][key].trim(),language+':'+key);}
   for(const match of html.matchAll(/data-i18n="([^"]+)"/g))assert.ok(keys.includes(match[1]),match[1]);
+  for(const match of html.matchAll(/data-i18n-aria-label="([^"]+)"/g))assert.ok(keys.includes(match[1]),match[1]);
   assert.match(html,/Simulazione · nessun addebito/);assert.match(html,/role="radiogroup"/);assert.match(html,/aria-live="polite" aria-atomic="true" tabindex="-1"/);
   assert.doesNotMatch(html,/<input[^>]+type="(?:text|number|password)"|CVV|IBAN/i);
 });
@@ -65,6 +67,13 @@ test('uncertain create response reuses exactly the same intent key',async()=>{
 
 test('flag-off session reveals no chooser and makes no billing request',async()=>{
   const h=harness([{data:{...session,billing_sandbox_available:false}}]);await h.controller.start();assert.equal(h.nodes['checkout-unavailable'].hidden,false);assert.equal(h.nodes['checkout-chooser'].hidden,true);assert.equal(h.requests.length,1);
+});
+
+test('language aria-label is localised and an initial catalog error has a dedicated retry',async()=>{
+  const h=harness([{data:session},new Error('offline'),{data:session},{data:plans}]);await h.controller.start();
+  assert.equal(h.nodes['checkout-retry'].hidden,false);assert.equal(h.nodes['checkout-chooser'].hidden,true);assert.equal(typeof h.nodes['checkout-retry'].listeners.click,'function');
+  h.controller.setLanguage('fr');assert.equal(h.nodes['checkout-language'].attributes['aria-label'],'Langue');
+  await h.nodes['checkout-retry'].listeners.click();assert.equal(h.requests.length,4);assert.equal(h.nodes['checkout-retry'].hidden,true);assert.equal(h.nodes['checkout-chooser'].hidden,false);
 });
 
 test('expired and cancelled states are textual and do not rely on colour',async()=>{

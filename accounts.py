@@ -15,6 +15,7 @@ import time
 import unicodedata
 
 from werkzeug.security import check_password_hash, generate_password_hash
+from storage_contracts import SQLiteMigration, apply_sqlite_migrations, migration_versions
 
 LOCALES = {"it", "de", "fr", "en"}
 EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -132,115 +133,106 @@ def _utc(timestamp):
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _migrate_accounts_v1(db):
+    statements = (
+        """CREATE TABLE IF NOT EXISTS account_companies (
+               id TEXT PRIMARY KEY, name TEXT NOT NULL,
+               identifier TEXT NOT NULL, identity_key TEXT NOT NULL UNIQUE,
+               verified INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL)""",
+        """CREATE TABLE IF NOT EXISTS account_users (
+               id TEXT PRIMARY KEY, company_id TEXT NOT NULL,
+               email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+               role TEXT NOT NULL, locale TEXT NOT NULL,
+               email_verified INTEGER NOT NULL DEFAULT 0,
+               membership_verified INTEGER NOT NULL DEFAULT 0,
+               active INTEGER NOT NULL DEFAULT 1,
+               session_version INTEGER NOT NULL DEFAULT 1, created REAL NOT NULL,
+               FOREIGN KEY(company_id) REFERENCES account_companies(id))""",
+        """CREATE TABLE IF NOT EXISTS account_tokens (
+               digest TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+               purpose TEXT NOT NULL, expires REAL NOT NULL,
+               used INTEGER NOT NULL DEFAULT 0,
+               FOREIGN KEY(user_id) REFERENCES account_users(id))""",
+        """CREATE TABLE IF NOT EXISTS consultation_entitlements (
+               company_id TEXT PRIMARY KEY, included INTEGER NOT NULL,
+               period_months INTEGER NOT NULL, period_started REAL NOT NULL,
+               next_reset REAL NOT NULL, updated REAL NOT NULL,
+               FOREIGN KEY(company_id) REFERENCES account_companies(id))""",
+        """CREATE TABLE IF NOT EXISTS consultation_policies (
+               company_id TEXT PRIMARY KEY,
+               included INTEGER NOT NULL CHECK(included IN (0,1)),
+               period_months INTEGER NOT NULL CHECK(period_months IN (1,12)),
+               updated REAL NOT NULL,
+               FOREIGN KEY(company_id) REFERENCES account_companies(id))""",
+        """CREATE TABLE IF NOT EXISTS consultation_requests (
+               id TEXT PRIMARY KEY, company_id TEXT NOT NULL, user_id TEXT NOT NULL,
+               case_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+               channel TEXT NOT NULL CHECK(channel IN ('phone','whatsapp')),
+               status TEXT NOT NULL CHECK(status IN ('reserved','used','cancelled')),
+               period_started REAL NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
+               used_at REAL, cancelled_at REAL,
+               FOREIGN KEY(company_id) REFERENCES account_companies(id),
+               FOREIGN KEY(user_id) REFERENCES account_users(id))""",
+        "CREATE INDEX IF NOT EXISTS consultation_requests_period ON consultation_requests(company_id,period_started,status)",
+        "CREATE INDEX IF NOT EXISTS consultation_requests_user ON consultation_requests(company_id,user_id,created)",
+    )
+    for statement in statements:
+        db.execute(statement)
+    # Positional access keeps migrations independent of connection row_factory.
+    columns = {row[1] for row in db.execute("PRAGMA table_info(consultation_requests)")}
+    if "idempotency_key" not in columns:
+        db.execute("ALTER TABLE consultation_requests ADD COLUMN idempotency_key TEXT")
+        db.execute("UPDATE consultation_requests SET idempotency_key='legacy:' || id WHERE idempotency_key IS NULL")
+    db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS consultation_requests_idempotency
+                  ON consultation_requests(company_id,user_id,idempotency_key)""")
+
+
+def _migrate_billing_v1(db):
+    db.execute("""CREATE TABLE IF NOT EXISTS billing_checkout_intents (
+        id TEXT PRIMARY KEY, company_id TEXT NOT NULL, user_id TEXT NOT NULL,
+        catalog_revision TEXT NOT NULL, plan_code TEXT NOT NULL, billing_cycle TEXT NOT NULL,
+        idempotency_key_hash TEXT NOT NULL, payload_hash TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('draft','confirmed_simulation','cancelled')),
+        created REAL NOT NULL, expires REAL NOT NULL, confirmed REAL, cancelled REAL,
+        FOREIGN KEY(company_id) REFERENCES account_companies(id),
+        FOREIGN KEY(user_id) REFERENCES account_users(id),
+        UNIQUE(company_id,user_id,idempotency_key_hash))""")
+    db.execute("CREATE INDEX IF NOT EXISTS billing_checkout_owner ON billing_checkout_intents(company_id,user_id,created)")
+    db.execute("""CREATE TABLE IF NOT EXISTS billing_checkout_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, intent_id TEXT NOT NULL,
+        company_id TEXT NOT NULL, user_id TEXT NOT NULL, event TEXT NOT NULL,
+        created REAL NOT NULL,
+        FOREIGN KEY(intent_id) REFERENCES billing_checkout_intents(id))""")
+
+
+def _migrate_billing_expiry_v1(db):
+    columns = {row[1] for row in db.execute("PRAGMA table_info(billing_checkout_intents)")}
+    if "expired" not in columns:
+        db.execute("ALTER TABLE billing_checkout_intents ADD COLUMN expired REAL")
+
+
+ACCOUNT_MIGRATIONS = (
+    SQLiteMigration(1, "accounts_and_consultations_v1", hashlib.sha256(b"accounts-v1-20261026").hexdigest(), _migrate_accounts_v1),
+    SQLiteMigration(2, "billing_sandbox_v1", hashlib.sha256(b"billing-v1-20261026").hexdigest(), _migrate_billing_v1),
+    SQLiteMigration(3, "billing_expiry_v1", hashlib.sha256(b"billing-expiry-v1-20261026").hexdigest(), _migrate_billing_expiry_v1),
+)
+
+
 class AccountStore:
+    durable = False
+
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._dummy_hash = generate_password_hash(secrets.token_urlsafe(32))
         with self.connect() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS account_companies (
-                    id TEXT PRIMARY KEY, name TEXT NOT NULL,
-                    identifier TEXT NOT NULL, identity_key TEXT NOT NULL UNIQUE,
-                    verified INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS account_users (
-                    id TEXT PRIMARY KEY, company_id TEXT NOT NULL,
-                    email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL, locale TEXT NOT NULL,
-                    email_verified INTEGER NOT NULL DEFAULT 0,
-                    membership_verified INTEGER NOT NULL DEFAULT 0,
-                    active INTEGER NOT NULL DEFAULT 1,
-                    session_version INTEGER NOT NULL DEFAULT 1,
-                    created REAL NOT NULL,
-                    FOREIGN KEY(company_id) REFERENCES account_companies(id)
-                );
-                CREATE TABLE IF NOT EXISTS account_tokens (
-                    digest TEXT PRIMARY KEY, user_id TEXT NOT NULL,
-                    purpose TEXT NOT NULL, expires REAL NOT NULL,
-                    used INTEGER NOT NULL DEFAULT 0,
-                    FOREIGN KEY(user_id) REFERENCES account_users(id)
-                );
-                CREATE TABLE IF NOT EXISTS consultation_entitlements (
-                    company_id TEXT PRIMARY KEY,
-                    included INTEGER NOT NULL,
-                    period_months INTEGER NOT NULL,
-                    period_started REAL NOT NULL,
-                    next_reset REAL NOT NULL,
-                    updated REAL NOT NULL,
-                    FOREIGN KEY(company_id) REFERENCES account_companies(id)
-                );
-                CREATE TABLE IF NOT EXISTS consultation_policies (
-                    company_id TEXT PRIMARY KEY,
-                    included INTEGER NOT NULL CHECK(included IN (0,1)),
-                    period_months INTEGER NOT NULL CHECK(period_months IN (1,12)),
-                    updated REAL NOT NULL,
-                    FOREIGN KEY(company_id) REFERENCES account_companies(id)
-                );
-                CREATE TABLE IF NOT EXISTS consultation_requests (
-                    id TEXT PRIMARY KEY,
-                    company_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    case_id TEXT NOT NULL,
-                    idempotency_key TEXT NOT NULL,
-                    channel TEXT NOT NULL CHECK(channel IN ('phone','whatsapp')),
-                    status TEXT NOT NULL CHECK(status IN ('reserved','used','cancelled')),
-                    period_started REAL NOT NULL,
-                    created REAL NOT NULL,
-                    updated REAL NOT NULL,
-                    used_at REAL,
-                    cancelled_at REAL,
-                    FOREIGN KEY(company_id) REFERENCES account_companies(id),
-                    FOREIGN KEY(user_id) REFERENCES account_users(id)
-                );
-                CREATE INDEX IF NOT EXISTS consultation_requests_period
-                    ON consultation_requests(company_id, period_started, status);
-                CREATE INDEX IF NOT EXISTS consultation_requests_user
-                    ON consultation_requests(company_id, user_id, created);
-                CREATE TABLE IF NOT EXISTS billing_checkout_intents (
-                    id TEXT PRIMARY KEY,
-                    company_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    catalog_revision TEXT NOT NULL,
-                    plan_code TEXT NOT NULL,
-                    billing_cycle TEXT NOT NULL,
-                    idempotency_key_hash TEXT NOT NULL,
-                    payload_hash TEXT NOT NULL,
-                    snapshot_json TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('draft','confirmed_simulation','cancelled')),
-                    created REAL NOT NULL,
-                    expires REAL NOT NULL,
-                    confirmed REAL,
-                    cancelled REAL,
-                    FOREIGN KEY(company_id) REFERENCES account_companies(id),
-                    FOREIGN KEY(user_id) REFERENCES account_users(id),
-                    UNIQUE(company_id,user_id,idempotency_key_hash)
-                );
-                CREATE INDEX IF NOT EXISTS billing_checkout_owner
-                    ON billing_checkout_intents(company_id,user_id,created);
-                CREATE TABLE IF NOT EXISTS billing_checkout_audit (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    intent_id TEXT NOT NULL,
-                    company_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    event TEXT NOT NULL,
-                    created REAL NOT NULL,
-                    FOREIGN KEY(intent_id) REFERENCES billing_checkout_intents(id)
-                );
-            """)
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(consultation_requests)")}
-            if "idempotency_key" not in columns:
-                db.execute("ALTER TABLE consultation_requests ADD COLUMN idempotency_key TEXT")
-                db.execute("UPDATE consultation_requests SET idempotency_key='legacy:' || id WHERE idempotency_key IS NULL")
-            db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS consultation_requests_idempotency
-                          ON consultation_requests(company_id,user_id,idempotency_key)""")
-            billing_columns = {
-                row["name"] for row in db.execute("PRAGMA table_info(billing_checkout_intents)")
-            }
-            if "expired" not in billing_columns:
-                # Preserve existing sandbox rows while making expiry explicit.
-                db.execute("ALTER TABLE billing_checkout_intents ADD COLUMN expired REAL")
+            apply_sqlite_migrations(db, "accounts", ACCOUNT_MIGRATIONS)
         self.path.chmod(0o600)
+
+    def schema_versions(self):
+        with self.connect() as db:
+            return migration_versions(db, "accounts")
 
     @contextmanager
     def connect(self):
