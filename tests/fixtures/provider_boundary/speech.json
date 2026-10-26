@@ -1,0 +1,1 @@
+{"schema":"slps.video.speech.response.v1","model":"recorded-speech-v1","locale":"it","output":{"language":"it","segments":[{"start":0.1,"end":0.8,"text":"Informazione pronunciata nel caso sintetico."}]}}
