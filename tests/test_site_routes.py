@@ -48,7 +48,7 @@ def test_home_is_a_static_landing_with_working_navigation(client):
     assert "Progetto in collaudo riservato" in page
     parsed = PageLinks()
     parsed.feed(page)
-    assert not parsed.scripts
+    assert parsed.scripts == ["/static/landing.js"]
     assert "analysis-form" not in parsed.ids
     assert parsed.links.count("/app") >= 3
     for href in parsed.links:
@@ -57,7 +57,25 @@ def test_home_is_a_static_landing_with_working_navigation(client):
         else:
             assert href in {"/", "/app"}
             assert client.get(href).status_code == 200
-    assert client.get("/static/landing.css").status_code == 200
+    for path in ["/static/landing.css", "/static/landing.js"]:
+        asset = client.get(path)
+        assert asset.status_code == 200
+        assert asset.headers["Cache-Control"] == "no-store"
+        assert "script-src 'self'" in asset.headers["Content-Security-Policy"]
+
+
+def test_landing_exposes_four_languages_and_states_media_and_export_limits(client):
+    page = client.get("/").get_data(as_text=True)
+    for locale in ["it", "de", "fr", "en"]:
+        assert f'value="{locale}"' in page
+    assert 'id="site-language"' in page
+    assert "verifica tecnica di formato, fotogrammi e traccia audio" in page
+    assert "Non è ancora un’analisi AI dei rischi del video" in page
+    assert "Esportazione e condivisione dipendono dalle condizioni di accesso" in page
+    assert "Stampa il rapporto" not in page
+    assert "formato strutturato JSON" not in page
+    assert 'href="/app"' in page
+    assert 'href="/register"' not in page
 
 
 @pytest.mark.parametrize("path", ["/app", "/app/"])

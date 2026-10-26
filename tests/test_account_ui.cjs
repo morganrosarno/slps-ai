@@ -12,10 +12,10 @@ function element(id, i18n = null) {
     addEventListener(type, fn) { this.listeners[type] = fn; }, focus() { this.focused = true; }, scrollIntoView() {},
     appendChild(child) { this.children.push(child); }, replaceChildren(...children) { this.children = children; if (this.id === 'consultation-case') this.value = children[0] ? children[0].value : ''; } };
 }
-function harness(responses = [], route = '/account') {
+function harness(responses = [], route = '/account', storedEntries = []) {
   const nodes = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(match => [match[1], element(match[1])]));
   const translated = [...html.matchAll(/data-i18n="([^"]+)"/g)].map((match, index) => element('translated-' + index, match[1]));
-  const saved = new Map(), requests = [];
+  const saved = new Map(storedEntries), requests = [];
   const document = { title: '', documentElement: { lang: 'it' }, getElementById: id => { assert.ok(nodes[id], 'Known element ' + id); return nodes[id]; }, querySelectorAll: () => translated, querySelector: () => null, createElement: tag => element(tag) };
   const window = { location: { pathname: route }, navigator: { language: 'it-CH' }, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) } };
   async function fetcher(url, options) {
@@ -188,6 +188,16 @@ test('Language survives a refresh without persisting account credentials', async
   assert.equal(h.document.documentElement.lang, 'en'); assert.equal(h.document.title, ui.dictionaries.en.pageTitle);
   assert.equal(h.nodes['account-heading'].textContent, ui.dictionaries.en.loginTitle);
   assert.deepEqual([...h.saved.keys()], [ui.storageKey]);
+});
+
+test('Account shares the site and app locale key and reads the previous account key', async () => {
+  const h = harness([{ data: anonymous }], '/account', [[ui.legacyStorageKey, 'fr']]);
+  await h.controller.start();
+  assert.equal(ui.storageKey, 'slps.locale');
+  assert.equal(h.controller.state.language, 'fr');
+  h.controller.setLanguage('de');
+  assert.equal(h.saved.get('slps.locale'), 'de');
+  assert.equal(h.saved.get(ui.legacyStorageKey), 'fr');
 });
 
 test('New screen includes accessible controls and responsive/reduced-motion rules', () => {

@@ -5,100 +5,104 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#13283F">
-  <meta name="description" content="SLPS AI affianca l’analisi della sicurezza sul lavoro: parti da una foto, aggiungi il contesto e verifica le azioni proposte. Progetto in collaudo riservato.">
+  <meta name="description" content="SLPS AI affianca la verifica della sicurezza sul lavoro con foto, contesto e azioni. I video brevi sono ancora una verifica tecnica, non un’analisi AI dei rischi.">
   <title>SLPS AI · Dalla foto, alle azioni.</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='landing.css') }}">
+  <script src="{{ url_for('static', filename='landing.js') }}" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Vai al contenuto</a>
+  <a class="skip-link" href="#main" data-i18n="skip">Vai al contenuto</a>
   <header class="site-header">
-    <a class="brand" href="{{ url_for('home') }}" aria-label="SLPS AI, pagina iniziale">
+    <a class="brand" href="{{ url_for('home') }}" aria-label="SLPS AI, pagina iniziale" data-i18n-aria="homeLabel">
       <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 36" fill="none"><path d="m16 2 13 5v11c0 8-9 14-13 16C12 32 3 26 3 18V7Z" stroke="currentColor" stroke-width="2"/><path d="m10 18 4 4 9-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      <span class="brand-name">SLPS <strong>AI</strong><small>Sicurezza sul lavoro · Svizzera</small></span>
+      <span class="brand-name">SLPS <strong>AI</strong><small data-i18n="brandTag">Sicurezza sul lavoro · Svizzera</small></span>
     </a>
-    <nav class="site-nav" aria-label="Navigazione principale">
-      <a class="nav-link" href="#come-funziona">Come funziona</a>
-      <a class="nav-link" href="#cosa-ricevi">Cosa ricevi</a>
-      <a class="button button-small" href="{{ url_for('workspace') }}">Apri l’app <span aria-hidden="true">↗</span></a>
+    <nav class="site-nav" aria-label="Navigazione principale" data-i18n-aria="navLabel">
+      <a class="nav-link" href="#come-funziona" data-i18n="navHow">Come funziona</a>
+      <a class="nav-link" href="#cosa-ricevi" data-i18n="navResults">Cosa ricevi</a>
+      <label class="language-control"><span class="sr-only" data-i18n="language">Lingua</span><select id="site-language" aria-label="Lingua" data-i18n-aria="language"><option value="it" lang="it">IT</option><option value="de" lang="de">DE</option><option value="fr" lang="fr">FR</option><option value="en" lang="en">EN</option></select></label>
+      <a class="button button-small" href="{{ url_for('workspace') }}"><span data-i18n="openApp">Apri l’app</span> <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
 
   <main id="main">
     <section class="hero section-shell" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <p class="pilot-status"><span aria-hidden="true"></span> Progetto in collaudo riservato</p>
-        <p class="eyebrow">Un supporto alla valutazione sul posto</p>
-        <h1 id="hero-title">Dalla foto,<br>alle <span class="headline-accent">azioni.</span></h1>
-        <p class="hero-description">Osserva una situazione di lavoro. Aggiungi ciò che la foto non racconta. Metti a fuoco le azioni da verificare sul posto.</p>
+        <p class="pilot-status"><span aria-hidden="true"></span><span data-i18n="pilotStatus">Progetto in collaudo riservato</span></p>
+        <p class="eyebrow" data-i18n="heroEyebrow">Un supporto alla valutazione sul posto</p>
+        <h1 id="hero-title"><span data-i18n="heroLine1">Dalla foto,</span><br><span data-i18n="heroLine2">alle</span> <span class="headline-accent" data-i18n="heroAccent">azioni.</span></h1>
+        <p class="hero-description" data-i18n="heroDescription">Osserva una situazione di lavoro. Aggiungi ciò che la foto non racconta. Metti a fuoco le azioni da verificare sul posto.</p>
+        <p class="media-note" data-i18n="mediaNote">Sono accettati anche brevi video con audio per una verifica tecnica di formato, fotogrammi e traccia audio. Non è ancora un’analisi AI dei rischi del video.</p>
         <div class="hero-actions">
-          <a class="button" href="{{ url_for('workspace') }}">Apri l’app <span aria-hidden="true">↗</span></a>
-          <a class="text-link" href="#come-funziona">Scopri il percorso <span aria-hidden="true">↓</span></a>
+          <a class="button" href="{{ url_for('workspace') }}"><span data-i18n="openApp">Apri l’app</span> <span aria-hidden="true">↗</span></a>
+          <a class="text-link" href="#come-funziona"><span data-i18n="discover">Scopri il percorso</span> <span aria-hidden="true">↓</span></a>
         </div>
-        {% if accounts_mode %}<p class="access-note">Accesso con account personale e azienda verificata.{% if registration_open %} <a href="/register">Crea il tuo account aziendale →</a>{% else %} <a href="/account">Accedi al tuo account →</a>{% endif %}</p>{% else %}<p class="access-note">Accesso con la password del pilota.</p>{% endif %}
+        {% if accounts_mode %}<p class="access-note"><span data-i18n="accountAccess">Accesso con account personale e azienda verificata.</span>{% if registration_open %} <a href="/register" data-i18n="createAccount">Crea il tuo account aziendale →</a>{% else %} <a href="/account" data-i18n="signInAccount">Accedi al tuo account →</a>{% endif %}</p>{% else %}<p class="access-note" data-i18n="pilotAccess">Accesso con la password del pilota.</p>{% endif %}
       </div>
 
       <figure class="process-visual" aria-labelledby="process-caption">
-        <div class="visual-topline"><span>DAL DETTAGLIO ALLA DECISIONE</span><span aria-hidden="true">↗</span></div>
+        <div class="visual-topline"><span data-i18n="visualTop">DAL DETTAGLIO ALLA DECISIONE</span><span aria-hidden="true">↗</span></div>
         <div class="process-map">
           <div class="map-track" aria-hidden="true"></div>
           <div class="map-node node-photo">
             <span class="node-index">01</span>
             <svg class="node-icon" viewBox="0 0 48 48" aria-hidden="true"><rect x="7" y="10" width="34" height="28" rx="4"/><circle cx="31" cy="19" r="3"/><path d="m8 32 11-10 10 10 6-6 6 6"/></svg>
-            <span class="node-copy"><strong>La foto</strong><span>Quello che si vede.</span></span>
+            <span class="node-copy"><strong data-i18n="photoTitle">La foto</strong><span data-i18n="photoCopy">Quello che si vede.</span></span>
           </div>
           <div class="map-node node-context">
             <span class="node-index">02</span>
             <svg class="node-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M37 10H11a4 4 0 0 0-4 4v17a4 4 0 0 0 4 4h6l7 6v-6h13a4 4 0 0 0 4-4V14a4 4 0 0 0-4-4Z"/><path d="M15 19h18M15 26h12"/></svg>
-            <span class="node-copy"><strong>Il contesto</strong><span>Quello che sai.</span></span>
+            <span class="node-copy"><strong data-i18n="contextTitle">Il contesto</strong><span data-i18n="contextCopy">Quello che sai.</span></span>
           </div>
           <div class="map-node node-actions">
             <span class="node-index">03</span>
             <svg class="node-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="m9 17 4 4 7-8M25 17h14M9 30l4 4 7-8M25 30h14"/></svg>
-            <span class="node-copy"><strong>Le azioni</strong><span>Da verificare sul posto.</span></span>
+            <span class="node-copy"><strong data-i18n="actionsTitle">Le azioni</strong><span data-i18n="actionsCopy">Da verificare sul posto.</span></span>
             <span class="node-arrow" aria-hidden="true">↗</span>
           </div>
         </div>
-        <figcaption id="process-caption"><span class="visual-cross" aria-hidden="true">+</span> Schema del percorso <span>Foto + contesto + verifica</span></figcaption>
+        <figcaption id="process-caption"><span class="visual-cross" aria-hidden="true">+</span><span data-i18n="visualCaption">Schema del percorso</span><span data-i18n="visualFormula">Foto + contesto + verifica</span></figcaption>
       </figure>
     </section>
 
     <div class="principle-strip section-shell">
-      <p>Una foto è un punto di partenza.<br><strong>Il contesto fa la differenza.</strong></p>
-      <p>SLPS AI aiuta a organizzare osservazioni, misure proposte e domande aperte. La valutazione va completata rispetto alle condizioni effettive di lavoro.</p>
+      <p><span data-i18n="principle1">Una foto è un punto di partenza.</span><br><strong data-i18n="principle2">Il contesto fa la differenza.</strong></p>
+      <p data-i18n="principleCopy">SLPS AI aiuta a organizzare osservazioni, misure proposte e domande aperte. La valutazione va completata rispetto alle condizioni effettive di lavoro.</p>
     </div>
 
     <section id="come-funziona" class="how-section section-shell" aria-labelledby="how-title">
       <div class="section-intro">
-        <div><p class="eyebrow">Come funziona</p><h2 id="how-title">Tre passi.<br>Una situazione concreta.</h2></div>
-        <p>Parti da ciò che hai davanti e costruisci una base per la verifica, un’informazione alla volta.</p>
+        <div><p class="eyebrow" data-i18n="howEyebrow">Come funziona</p><h2 id="how-title"><span data-i18n="howTitle1">Tre passi.</span><br><span data-i18n="howTitle2">Una situazione concreta.</span></h2></div>
+        <p data-i18n="howIntro">Parti da ciò che hai davanti e costruisci una base per la verifica, un’informazione alla volta.</p>
       </div>
       <ol class="steps-grid">
-        <li class="step-card"><div class="step-top"><span>01</span><span aria-hidden="true">↗</span></div><h3>Carica una foto</h3><p>Scegli una fotografia della situazione di lavoro da esaminare.</p><p class="step-detail">JPG, PNG o WebP · massimo 10 MB</p></li>
-        <li class="step-card"><div class="step-top"><span>02</span><span aria-hidden="true">+</span></div><h3>Aggiungi il contesto</h3><p>Descrivi l’attività, le attrezzature e le condizioni che non si vedono nell’inquadratura.</p><p class="step-detail">Le informazioni che conosci contano.</p></li>
-        <li class="step-card"><div class="step-top"><span>03</span><span aria-hidden="true">✓</span></div><h3>Verifica le azioni</h3><p>Esamina le misure proposte e rispondi alle domande utili a completare la valutazione.</p><p class="step-detail">Conferma le condizioni sul posto.</p></li>
+        <li class="step-card"><div class="step-top"><span>01</span><span aria-hidden="true">↗</span></div><h3 data-i18n="step1Title">Carica una foto</h3><p data-i18n="step1Copy">Scegli una fotografia della situazione di lavoro da esaminare.</p><p class="step-detail" data-i18n="step1Detail">JPG, PNG o WebP · massimo 10 MB</p></li>
+        <li class="step-card"><div class="step-top"><span>02</span><span aria-hidden="true">+</span></div><h3 data-i18n="step2Title">Aggiungi il contesto</h3><p data-i18n="step2Copy">Descrivi l’attività, le attrezzature e le condizioni che non si vedono nell’inquadratura.</p><p class="step-detail" data-i18n="step2Detail">Le informazioni che conosci contano.</p></li>
+        <li class="step-card"><div class="step-top"><span>03</span><span aria-hidden="true">✓</span></div><h3 data-i18n="step3Title">Verifica le azioni</h3><p data-i18n="step3Copy">Esamina le misure proposte e rispondi alle domande utili a completare la valutazione.</p><p class="step-detail" data-i18n="step3Detail">Conferma le condizioni sul posto.</p></li>
       </ol>
     </section>
 
     <section id="cosa-ricevi" class="outcomes-section section-shell" aria-labelledby="outcomes-title">
-      <div class="outcomes-intro"><p class="eyebrow">Cosa ricevi</p><h2 id="outcomes-title">Un punto di partenza<br>per agire con criterio.</h2><p>Il risultato mette in ordine ciò che emerge dalla foto e dal contesto, lasciando visibili i punti da chiarire.</p><a class="text-link" href="{{ url_for('workspace') }}">Nuova analisi <span aria-hidden="true">↗</span></a></div>
+      <div class="outcomes-intro"><p class="eyebrow" data-i18n="resultsEyebrow">Cosa ricevi</p><h2 id="outcomes-title"><span data-i18n="resultsTitle1">Un punto di partenza</span><br><span data-i18n="resultsTitle2">per agire con criterio.</span></h2><p data-i18n="resultsIntro">Il risultato mette in ordine ciò che emerge dalla foto e dal contesto, lasciando visibili i punti da chiarire.</p><a class="text-link" href="{{ url_for('workspace') }}"><span data-i18n="newAnalysis">Nuova analisi</span> <span aria-hidden="true">↗</span></a></div>
       <div class="outcomes-list">
-        <div class="outcome"><span class="outcome-number">01</span><div><h3>Osservazioni da esaminare</h3><p>Elementi rilevati, informazioni fornite e limiti della valutazione.</p></div></div>
-        <div class="outcome"><span class="outcome-number">02</span><div><h3>Misure e tempi proposti</h3><p>Azioni operative da valutare rispetto all’attività e alle condizioni reali.</p></div></div>
-        <div class="outcome"><span class="outcome-number">03</span><div><h3>Domande per fare chiarezza</h3><p>Informazioni mancanti che possono cambiare la valutazione.</p></div></div>
-        <div class="outcome"><span class="outcome-number">04</span><div><h3>Un risultato da conservare</h3><p>Stampa il rapporto o esporta i dati dell’analisi in formato JSON.</p></div></div>
+        <div class="outcome"><span class="outcome-number">01</span><div><h3 data-i18n="outcome1Title">Osservazioni da esaminare</h3><p data-i18n="outcome1Copy">Elementi rilevati, informazioni fornite e limiti della valutazione.</p></div></div>
+        <div class="outcome"><span class="outcome-number">02</span><div><h3 data-i18n="outcome2Title">Misure e tempi proposti</h3><p data-i18n="outcome2Copy">Azioni operative da valutare rispetto all’attività e alle condizioni reali.</p></div></div>
+        <div class="outcome"><span class="outcome-number">03</span><div><h3 data-i18n="outcome3Title">Domande per fare chiarezza</h3><p data-i18n="outcome3Copy">Informazioni mancanti che possono cambiare la valutazione.</p></div></div>
+        <div class="outcome"><span class="outcome-number">04</span><div><h3 data-i18n="outcome4Title">Uno storico riservato</h3><p data-i18n="outcome4Copy">Gli account abilitati possono riaprire i propri casi conservati. Esportazione e condivisione dipendono dalle condizioni di accesso.</p></div></div>
       </div>
     </section>
 
     <section class="closing-section section-shell" aria-labelledby="closing-title">
       <div class="closing-panel">
-        <div><p class="eyebrow">Progetto in collaudo riservato</p><h2 id="closing-title">Parti dalla<br>situazione reale.</h2><p>Hai già la password del pilota?<br>Apri l’app e prepara la tua prima analisi.</p></div>
-        <a class="button button-amber" href="{{ url_for('workspace') }}">Apri l’app <span aria-hidden="true">↗</span></a>
+        <div><p class="eyebrow" data-i18n="pilotStatus">Progetto in collaudo riservato</p><h2 id="closing-title"><span data-i18n="closingTitle1">Parti dalla</span><br><span data-i18n="closingTitle2">situazione reale.</span></h2><p data-i18n="closingCopy">Apri l’accesso riservato e prepara la tua prima analisi quando il tuo account o il pilota sono abilitati.</p></div>
+        <a class="button button-amber" href="{{ url_for('workspace') }}"><span data-i18n="openApp">Apri l’app</span> <span aria-hidden="true">↗</span></a>
         <span class="closing-decoration" aria-hidden="true">↗</span>
       </div>
-      <p class="closing-note">Le misure proposte richiedono verifica sul posto. Una foto non rappresenta tutte le condizioni di lavoro.</p>
+      <p class="closing-note" data-i18n="closingNote">Le misure proposte richiedono verifica sul posto. Una foto non rappresenta tutte le condizioni di lavoro.</p>
     </section>
   </main>
 
-  <footer class="site-footer section-shell"><a href="{{ url_for('home') }}" aria-label="SLPS AI, pagina iniziale">SLPS <strong>AI</strong></a><p>Osservare con precisione. Agire con criterio.</p><span>Collaudo riservato</span></footer>
+  <footer class="site-footer section-shell"><a href="{{ url_for('home') }}" aria-label="SLPS AI, pagina iniziale" data-i18n-aria="homeLabel">SLPS <strong>AI</strong></a><p data-i18n="footerClaim">Osservare con precisione. Agire con criterio.</p><span data-i18n="footerStatus">Collaudo riservato</span></footer>
+  <noscript><div class="no-script" role="note"><p lang="it">JavaScript è necessario soltanto per cambiare lingua; pagina e collegamenti restano disponibili in italiano.</p><p lang="de">JavaScript wird nur für den Sprachwechsel benötigt; Seite und Links bleiben auf Italienisch verfügbar.</p><p lang="fr">JavaScript est nécessaire uniquement pour changer de langue ; la page et les liens restent disponibles en italien.</p><p lang="en">JavaScript is needed only to change language; the page and links remain available in Italian.</p></div></noscript>
 </body>
 </html>

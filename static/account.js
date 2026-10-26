@@ -67,7 +67,8 @@
   };
   Object.keys(dictionaries).forEach(language => Object.assign(dictionaries[language], consultationDetailTranslations[language]));
   const locales = Object.keys(dictionaries);
-  const storageKey = 'slps.account.locale';
+  const storageKey = 'slps.locale';
+  const legacyStorageKey = 'slps.account.locale';
   function eligible(account) {
     return Boolean(account && account.eligible_for_analysis === true && account.email_verified === true && account.membership_verified === true && account.company && account.company.verified === true);
   }
@@ -88,7 +89,7 @@
   function createController(document, window, fetcher) {
     const $ = id => document.getElementById(id);
     let saved = null;
-    try { saved = window.localStorage.getItem(storageKey); } catch (_) { /* Storage is optional. */ }
+    try { saved = window.localStorage.getItem(storageKey) || window.localStorage.getItem(legacyStorageKey); } catch (_) { /* Storage is optional. */ }
     const browser = String(window.navigator && window.navigator.language || '').slice(0, 2);
     const state = { language: locales.includes(saved) ? saved : locales.includes(browser) ? browser : 'it', explicitLanguage: locales.includes(saved), view: window.location.pathname.replace(/\/$/, '') === '/register' ? 'register' : 'login', csrf: '', authenticated: false, authConfigured: false, account: null, authMode: null, registrationOpen: false, busy: false, loading: true, notice: null, consultation: null, consultationCases: [], consultationKey: null };
     const t = key => dictionaries[state.language][key] || dictionaries.it[key] || key;
@@ -301,5 +302,5 @@
     async function start() { bind(); translate(); await refresh(); }
     return { start, refresh, register, login, logout, loadConsultations, requestConsultation, cancelConsultation, applySession, setLanguage, showView, state };
   }
-  return { dictionaries, locales, storageKey, eligible, errorKey, createController };
+  return { dictionaries, locales, storageKey, legacyStorageKey, eligible, errorKey, createController };
 });

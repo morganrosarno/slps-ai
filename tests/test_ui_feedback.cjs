@@ -11,8 +11,9 @@ const script = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const template = fs.readFileSync(path.join(root, 'templates/index.html'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseStorage = null, caseListStatus = 200, sessionResponses = [], deferHistory = false, sessionData = {} } = {}) {
+async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseStorage = null, caseListStatus = 200, sessionResponses = [], deferHistory = false, sessionData = {}, initialLocale = null } = {}) {
   const elements = new Map(), requests = [], historyGets = [], scrolls = [], exports = [], prints = [], navigations = [];
+  const stored = new Map(initialLocale ? [['slps.locale', initialLocale]] : []), storageWrites = [];
   let currentCases = [...initialCases];
   let doc;
   class Element {
@@ -45,11 +46,11 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
     const copies = new Map([...elements].filter(([id]) => id !== 'report').map(([id, element]) => [id, element.cloneNode(true)]));
     return { querySelector: selector => copies.get(selector.slice(1)) };
   };
-  doc = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => text, body: new Element('body'), activeElement: null };
+  doc = { getElementById: $, createElement: tag => new Element(tag), createTextNode: text => text, body: new Element('body'), documentElement: {}, activeElement: null };
   const session = { authenticated: true, configured: true, csrf: 'test-csrf', ...sessionData };
   let sessionReadCount = 0;
   const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
-  const context = { document: doc, window: { matchMedia: () => ({ matches: reducedMotion }), location: { assign: value => navigations.push(value) }, print() { prints.push(true); } }, URL: class extends URL { static createObjectURL(value) { if (value instanceof Blob) exports.push(value); return 'blob:test-photo'; } static revokeObjectURL() {} }, Blob, AbortController, FormData: class { append() {} }, setTimeout: callback => { callback(); }, console,
+  const context = { document: doc, navigator: { language: 'it-CH' }, window: { matchMedia: () => ({ matches: reducedMotion }), localStorage: { getItem: key => stored.get(key) || null, setItem: (key, value) => { stored.set(key, value); storageWrites.push([key, value]); } }, location: { assign: value => navigations.push(value) }, print() { prints.push(true); } }, URL: class extends URL { static createObjectURL(value) { if (value instanceof Blob) exports.push(value); return 'blob:test-photo'; } static revokeObjectURL() {} }, Blob, AbortController, FormData: class { append() {} }, setTimeout: callback => { callback(); }, console,
     fetch: async (url, options = {}) => {
       if (url === '/api/session') {
         if (sessionReadCount++ === 0) return response(session);
@@ -71,9 +72,56 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
     request.resolve(data, status); await tick(); await tick();
   }
   async function finish(data, status = 200) { await finishRequest('/analizza', data, status); }
-  return { $, doc, photo, video, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, navigations, session, Element };
+  return { $, doc, photo, video, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, navigations, session, Element, storageWrites, i18n: context.window.SLPS_APP_I18N };
 }
 const report = (summary = 'Valid report') => ({ findings: [], questions: [], sources: [], summary });
+
+test('app locale dictionaries have parity and the explicit selector persists only the shared locale key', async () => {
+  assert.match(template, /id="app-language"/);
+  for (const code of ['it', 'de', 'fr', 'en']) assert.match(template, new RegExp('option value="' + code + '"'));
+  const f = await fixture();
+  const keys = Object.keys(f.i18n.messages.it).sort();
+  for (const code of f.i18n.locales) assert.deepEqual(Object.keys(f.i18n.messages[code]).sort(), keys);
+  f.$('app-language').value = 'de';
+  await f.$('app-language').handlers.change({ target: f.$('app-language') });
+  assert.deepEqual(f.storageWrites, [['slps.locale', 'de']]);
+  assert.equal(f.doc.documentElement.lang, 'de');
+  assert.equal(f.$('workspace-title').textContent, 'Arbeitssituation analysieren.');
+  assert.equal(f.requests.length, 0, 'changing language must not issue a provider request');
+});
+
+test('all four metadata descriptions distinguish photo AI analysis from technical video and audio verification', async () => {
+  const f = await fixture();
+  const descriptions = f.i18n.metaDescriptions;
+  assert.deepEqual(Object.keys(descriptions).sort(), ['de', 'en', 'fr', 'it']);
+  assert.equal(template.includes(`content="${descriptions.it}"`), true);
+  for (const code of ['it', 'de', 'fr', 'en']) {
+    assert.match(descriptions[code], /AI|IA|KI/);
+    assert.match(descriptions[code], /foto|Foto|photos/);
+    assert.match(descriptions[code], /tecnic|technisch|technique|technical/i);
+    assert.match(descriptions[code], /vid[ée]o/i);
+    assert.match(descriptions[code], /audio/i);
+  }
+});
+
+test('all four locales render dynamic validation and localized dates', async () => {
+  const expected = { it: 'Seleziona una foto', de: 'Wählen Sie vor dem Start', fr: 'Sélectionnez une photo', en: 'Select a photo' };
+  for (const code of ['it', 'de', 'fr', 'en']) {
+    const f = await fixture({ initialLocale: code, initialCases: [{ id: code, created_at: 1792920000, summary: 'Verbatim summary', context: '' }] });
+    await f.submit();
+    assert.match(f.$('analysis-feedback').textContent, new RegExp(expected[code]));
+    const date = f.$('history-list').childNodes[0].querySelector('.history-date').textContent;
+    assert.equal(date, new Intl.DateTimeFormat({ it:'it-CH', de:'de-CH', fr:'fr-CH', en:'en-CH' }[code], { dateStyle:'medium', timeStyle:'short' }).format(new Date(1792920000 * 1000)));
+  }
+});
+
+test('non-Italian locales never echo an Italian backend error message', async () => {
+  const f = await fixture({ initialLocale: 'en' });
+  f.photo(); await f.submit();
+  await f.finish({ error: { code: 'provider_unavailable', message: 'Servizio non disponibile in italiano' } }, 503);
+  assert.match(f.$('analysis-feedback').textContent, /temporarily unavailable/i);
+  assert.doesNotMatch(f.$('analysis-feedback').textContent, /Servizio|italiano/);
+});
 
 test('anonymous and pending company accounts return to the dedicated account page without fetching cases', async () => {
   for (const sessionData of [
