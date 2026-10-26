@@ -134,6 +134,43 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
 
     password = env.get("SLPS_PILOT_PASSWORD", "")
     session_secret = env.get("SLPS_SESSION_SECRET", "")
+    gate_enabled = env.get("SLPS_PRIVATE_GATE_ENABLED", "false")
+    gate_enabled = isinstance(gate_enabled, str) and gate_enabled.strip().lower() == "true"
+    results.append(check(
+        "private_gate", gate_enabled,
+        "Protezione di ingresso per l'ambiente riservato attiva.",
+        "Lo staging riservato richiede SLPS_PRIVATE_GATE_ENABLED=true: anche sito e risorse devono essere protetti.",
+    ))
+    gate_password = env.get("SLPS_PRIVATE_GATE_PASSWORD", "")
+    gate_password_valid = (isinstance(gate_password, str) and 16 <= len(gate_password) <= 256
+                           and bool(gate_password.strip()))
+    results.append(check(
+        "private_gate_password", gate_password_valid,
+        "Password di ingresso riservato configurata.",
+        "SLPS_PRIVATE_GATE_PASSWORD deve contenere da 16 a 256 caratteri non tutti vuoti.",
+    ))
+    results.append(check(
+        "private_gate_secrets_distinct",
+        bool(gate_password_valid and gate_password != session_secret and gate_password != password),
+        "Password di ingresso distinta dagli altri segreti.",
+        "La password di ingresso deve essere distinta dal segreto di sessione e dalla password del pilota.",
+    ))
+    provider_cap_raw = env.get("SLPS_PROVIDER_REQUESTS_TOTAL", "")
+    try:
+        provider_cap_valid = (isinstance(provider_cap_raw, str)
+                              and bool(re.fullmatch(r"[0-9]+", provider_cap_raw.strip()))
+                              and 1 <= int(provider_cap_raw) <= 10000)
+    except (TypeError, ValueError):
+        provider_cap_valid = False
+    results.append(check(
+        "provider_request_cap", provider_cap_valid,
+        "Tetto totale delle richieste al fornitore configurato, inclusi chiarimenti e tentativi falliti.",
+        "SLPS_PROVIDER_REQUESTS_TOTAL è obbligatorio per lo staging: intero da 1 a 10000; nessuna chiamata reale senza limite e consumo autorizzato.",
+    ))
+    results.append(Check(
+        "provider_request_cap_scope", "warning", "warning",
+        "Il tetto conta tentativi persistenti e non rimborsa errori potenzialmente fatturati; non è un limite monetario. Costi, quota e persistenza del contatore richiedono verifica separata.",
+    ))
     results.append(check("session_secret", len(session_secret) >= 32 and bool(session_secret.strip()),
                          "Segreto di sessione configurato.", "Segreto di sessione assente, vuoto o più corto di 32 caratteri."))
     if auth_mode == "pilot":

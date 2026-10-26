@@ -21,6 +21,9 @@ class PreflightTests(unittest.TestCase):
         return {
             "SLPS_PILOT_PASSWORD": "pilot-password-16-chars",
             "SLPS_SESSION_SECRET": "session-secret-with-at-least-32-characters",
+            "SLPS_PRIVATE_GATE_ENABLED": "true",
+            "SLPS_PRIVATE_GATE_PASSWORD": "private-gate-test-password-only",
+            "SLPS_PROVIDER_REQUESTS_TOTAL": "6",
             "OPENAI_API_KEY": "present-but-never-printed",
             "OPENAI_MODEL": "explicit-test-model",
             "SLPS_PROMPT_PATH": str(master),
@@ -65,6 +68,46 @@ class PreflightTests(unittest.TestCase):
             self.assertNotIn(env["SLPS_PILOT_PASSWORD"], serialized)
             self.assertNotIn(env["SLPS_PILOT_TENANT_ID"], serialized)
             self.assertNotIn(env["SLPS_PILOT_OWNER_ID"], serialized)
+            self.assertNotIn(env["SLPS_PRIVATE_GATE_PASSWORD"], serialized)
+            self.assertEqual(checks["private_gate"]["status"], "pass")
+            self.assertEqual(checks["provider_request_cap"]["status"], "pass")
+
+    def test_private_staging_requires_gate_distinct_password_and_total_cap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = self.configured(root)
+            for value in (None, "", "false", "yes", "1"):
+                with self.subTest(gate=value):
+                    if value is None:
+                        env.pop("SLPS_PRIVATE_GATE_ENABLED", None)
+                    else:
+                        env["SLPS_PRIVATE_GATE_ENABLED"] = value
+                    checks = {item.id: item for item in preflight.run_checks(env, root)}
+                    self.assertEqual(checks["private_gate"].status, "blocker")
+            env["SLPS_PRIVATE_GATE_ENABLED"] = "true"
+            for value in ("", "short", " " * 32, "x" * 257):
+                with self.subTest(password_length=len(value)):
+                    env["SLPS_PRIVATE_GATE_PASSWORD"] = value
+                    checks = {item.id: item for item in preflight.run_checks(env, root)}
+                    self.assertEqual(checks["private_gate_password"].status, "blocker")
+            for variable in ("SLPS_SESSION_SECRET", "SLPS_PILOT_PASSWORD"):
+                env["SLPS_PRIVATE_GATE_PASSWORD"] = env[variable]
+                checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks["private_gate_secrets_distinct"].status, "blocker")
+            env["SLPS_PRIVATE_GATE_PASSWORD"] = "private-gate-test-password-only"
+            for value in (None, "", "0", "-1", "10001", "1.5", "unlimited", "+6"):
+                with self.subTest(cap=value):
+                    if value is None:
+                        env.pop("SLPS_PROVIDER_REQUESTS_TOTAL", None)
+                    else:
+                        env["SLPS_PROVIDER_REQUESTS_TOTAL"] = value
+                    checks = {item.id: item for item in preflight.run_checks(env, root)}
+                    self.assertEqual(checks["provider_request_cap"].status, "blocker")
+            for value in ("1", "6", "10000"):
+                env["SLPS_PROVIDER_REQUESTS_TOTAL"] = value
+                checks = {item.id: item for item in preflight.run_checks(env, root)}
+                self.assertEqual(checks["provider_request_cap"].status, "pass")
+                self.assertEqual(checks["provider_request_cap_scope"].status, "warning")
 
     def test_archive_paths_warn_when_missing_and_block_unsafe_locations(self):
         with tempfile.TemporaryDirectory() as temporary:

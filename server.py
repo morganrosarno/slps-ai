@@ -16,7 +16,7 @@ import time
 from urllib.parse import urlsplit
 import warnings
 
-from flask import Flask, Request, jsonify, redirect, render_template, request, send_file, session
+from flask import Flask, Request, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
@@ -79,10 +79,16 @@ def _migrate_trial_clarifications_v1(db):
     )
 
 
+def _migrate_provider_attempts_v1(db):
+    db.execute("CREATE TABLE IF NOT EXISTS provider_attempts (id INTEGER PRIMARY KEY CHECK(id=1), used INTEGER NOT NULL CHECK(used>=0))")
+    db.execute("INSERT OR IGNORE INTO provider_attempts VALUES (1,0)")
+
+
 LIMIT_MIGRATIONS = (
     SQLiteMigration(1, "limit_events_and_leases_v1", hashlib.sha256(b"limit-events-leases-v1-20261026").hexdigest(), _migrate_limit_events_v1),
     SQLiteMigration(2, "trial_usage_v1", hashlib.sha256(b"trial-usage-v1-20261026").hexdigest(), _migrate_trial_usage_v1),
     SQLiteMigration(3, "trial_clarifications_v1", hashlib.sha256(b"trial-clarifications-v1-20261026").hexdigest(), _migrate_trial_clarifications_v1),
+    SQLiteMigration(4, "provider_attempts_v1", hashlib.sha256(b"provider-attempts-v1-20261026").hexdigest(), _migrate_provider_attempts_v1),
 )
 
 
@@ -146,6 +152,26 @@ class LimitStore:
     def release_analysis(self, token):
         with self.connect() as db:
             db.execute("DELETE FROM leases WHERE name='analysis' AND token=?", (token,))
+
+    def reserve_provider_request(self, limit):
+        """Count dispatch attempts durably, without refunding uncertain failures.
+
+        None is uncapped synthetic compatibility mode. A positive cap is required
+        by private-staging preflight; this counts requests, never currency.
+        """
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 10000):
+            return False
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            used = db.execute("SELECT used FROM provider_attempts WHERE id=1").fetchone()[0]
+            if limit is not None and used >= limit:
+                return False
+            db.execute("UPDATE provider_attempts SET used=used+1 WHERE id=1")
+        return True
+
+    def provider_request_count(self):
+        with self.connect() as db:
+            return int(db.execute("SELECT used FROM provider_attempts WHERE id=1").fetchone()[0])
 
     def reserve_media(self, scope, limit=6, window=900, lease_seconds=90):
         now = time.time()
@@ -758,6 +784,9 @@ def create_app(test_config=None):
         SECRET_KEY=os.getenv("SLPS_SESSION_SECRET"),
         PILOT_PASSWORD=os.getenv("SLPS_PILOT_PASSWORD"),
         AUTH_MODE=os.getenv("SLPS_AUTH_MODE", "pilot"),
+        PRIVATE_GATE_ENABLED=os.getenv("SLPS_PRIVATE_GATE_ENABLED", "false"),
+        PRIVATE_GATE_PASSWORD=os.getenv("SLPS_PRIVATE_GATE_PASSWORD"),
+        PROVIDER_REQUESTS_TOTAL=os.getenv("SLPS_PROVIDER_REQUESTS_TOTAL"),
         DATA_MODE=os.getenv("SLPS_DATA_MODE", "synthetic"),
         ACCOUNT_REGISTRATION_OPEN=os.getenv("SLPS_ACCOUNT_REGISTRATION_OPEN", "false").lower() == "true",
         BILLING_SANDBOX_ENABLED=os.getenv("SLPS_BILLING_SANDBOX_ENABLED", "false").lower() == "true",
@@ -789,6 +818,12 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    gate_setting = app.config["PRIVATE_GATE_ENABLED"]
+    if isinstance(gate_setting, str) and gate_setting.strip().lower() in {"true", "false"}:
+        gate_setting = gate_setting.strip().lower() == "true"
+    if type(gate_setting) is not bool:
+        raise ValueError("invalid_private_gate_setting")
+    app.config["PRIVATE_GATE_ENABLED"] = gate_setting
     if not app.config.get("HISTORY_ROOT"):
         app.config["HISTORY_ROOT"] = str(Path(app.config["CASE_DB_PATH"]).parent / "history-media")
     # This check must happen before constructors create SQLite files or media
@@ -817,6 +852,94 @@ def create_app(test_config=None):
 
     def account_mode():
         return app.config["AUTH_MODE"] == "accounts"
+
+    def provider_request_limit():
+        raw = app.config.get("PROVIDER_REQUESTS_TOTAL")
+        if raw is None or raw == "":
+            return None
+        try:
+            if isinstance(raw, bool):
+                return 0
+            text = str(raw).strip()
+            if not re.fullmatch(r"[0-9]+", text):
+                return 0
+            value = int(text)
+            return value if 1 <= value <= 10000 else 0
+        except (ValueError, TypeError):
+            return 0
+
+    def gate_configured():
+        password, secret = app.config.get("PRIVATE_GATE_PASSWORD"), app.config.get("SECRET_KEY")
+        return bool(isinstance(password, str) and 16 <= len(password) <= 256 and password.strip()
+                    and isinstance(secret, str) and len(secret) >= 32 and secret.strip()
+                    and password not in {secret, app.config.get("PILOT_PASSWORD")}
+                    and provider_request_limit() not in {None, 0})
+
+    def gate_fingerprint():
+        return hmac.new(app.config["SECRET_KEY"].encode(),
+                        ("private-gate:" + app.config["PRIVATE_GATE_PASSWORD"]).encode(),
+                        hashlib.sha256).hexdigest()
+
+    def clear_auth_session():
+        # Site-preview access and application identity are separate credentials.
+        gate = session.get("private_gate")
+        session.clear()
+        if gate:
+            session["private_gate"] = gate
+
+    def safe_gate_return(value):
+        # Exact application paths exclude schemes, network paths, escapes and
+        # query/fragment secrets; no user-provided URL is used as a Location.
+        return value if value in {"/", "/app", "/app/", "/account", "/register", "/account/checkout"} else "/"
+
+    @app.before_request
+    def private_environment_gate():
+        if not app.config["PRIVATE_GATE_ENABLED"] or request.endpoint == "health":
+            return None
+        if not gate_configured():
+            return error("private_gate_configuration_missing", "Accesso riservato non ancora configurato.", 503)
+        if request.endpoint == "private_access":
+            return None
+        fingerprint = session.get("private_gate", "")
+        if isinstance(fingerprint, str) and hmac.compare_digest(fingerprint, gate_fingerprint()):
+            return None
+        if request.path.startswith("/api/") or request.method not in {"GET", "HEAD"} or request.path == "/analizza":
+            return error("private_access_required", "Accedi prima all’ambiente riservato.", 401)
+        return redirect(url_for("private_access", next=safe_gate_return(request.path)))
+
+    @app.route("/private-access", methods=["GET", "POST"])
+    def private_access():
+        if not app.config["PRIVATE_GATE_ENABLED"]:
+            return redirect("/")
+        target = safe_gate_return(request.args.get("next", "/"))
+        message, status = None, 200
+        if "private_gate_csrf" not in session:
+            session["private_gate_csrf"] = secrets.token_urlsafe(32)
+        if request.method == "POST":
+            if (request.content_length or 0) > 8192:
+                return error("invalid_request", "Richiesta troppo grande.", 413)
+            supplied_csrf = request.form.get("csrf", "")
+            expected_csrf = session.get("private_gate_csrf")
+            if (not same_origin() or len(supplied_csrf) > 128 or not isinstance(expected_csrf, str)
+                    or not hmac.compare_digest(supplied_csrf.encode(), expected_csrf.encode())):
+                return error("invalid_csrf", "Ricarica la pagina e riprova.", 403)
+            password = request.form.get("password", "")
+            scope = "private-gate:" + hmac.new(app.config["SECRET_KEY"].encode(),
+                (request.remote_addr or "unknown").encode(), hashlib.sha256).hexdigest()
+            if not store.login(scope, False):
+                message, status = "Troppi tentativi. Attendi 15 minuti prima di riprovare.", 429
+            elif len(password) <= 256 and hmac.compare_digest(password.encode(), app.config["PRIVATE_GATE_PASSWORD"].encode()):
+                with store.connect() as db:
+                    db.execute("DELETE FROM events WHERE kind='login' AND scope=?", (scope,))
+                session.clear()
+                session.permanent = True
+                session["private_gate"] = gate_fingerprint()
+                return redirect(target, code=303)
+            else:
+                message, status = "Accesso non riuscito. Controlla la password riservata.", 401
+        g.private_gate_nonce = secrets.token_urlsafe(18)
+        return render_template("private_access.html", csrf=session["private_gate_csrf"],
+                               target=target, message=message, nonce=g.private_gate_nonce), status
 
     def plan():
         # A legacy pilot configuration must never grant account users internal access.
@@ -848,7 +971,7 @@ def create_app(test_config=None):
 
     def validate_session_mode():
         if session.get("authenticated") and session.get("auth_mode") != app.config["AUTH_MODE"]:
-            session.clear()
+            clear_auth_session()
 
     def current_account():
         validate_session_mode()
@@ -856,7 +979,7 @@ def create_app(test_config=None):
             return None
         user = accounts.get_user(session.get("account_user_id"))
         if not user or session.get("account_session_version") != user["session_version"]:
-            session.clear()
+            clear_auth_session()
             return None
         # Always restore trusted identity from storage, not request/cookie fields.
         session["tenant_id"], session["owner_id"] = user["company_id"], user["id"]
@@ -996,6 +1119,9 @@ def create_app(test_config=None):
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+        if getattr(g, "private_gate_nonce", None):
+            response.headers["Content-Security-Policy"] = response.headers["Content-Security-Policy"].replace(
+                "style-src 'self'", "style-src 'self' 'nonce-" + g.private_gate_nonce + "'")
         if app.config["SESSION_COOKIE_SECURE"]:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -1084,7 +1210,7 @@ def create_app(test_config=None):
                 return error("login_rate_limited", "Troppi tentativi. Attendi 15 minuti prima di riprovare.", 429)
         if not success:
             return error("invalid_credentials", "Password non valida.", 401)
-        session.clear()
+        clear_auth_session()
         session.permanent = True
         session["authenticated"] = True
         session["auth_mode"] = app.config["AUTH_MODE"]
@@ -1152,13 +1278,13 @@ def create_app(test_config=None):
         data = request.get_json()
         if not accounts.consume_token(data.get("token"), "reset", data.get("password")):
             return error("invalid_token", "Codice non valido/scaduto o password non valida (16–256 caratteri).", 400)
-        session.clear()
+        clear_auth_session()
         return jsonify(reset=True, authenticated=False)
 
     @app.post("/api/logout")
     @protect(allow_unverified=True)
     def logout():
-        session.clear()
+        clear_auth_session()
         return jsonify(authenticated=False)
 
     @app.get("/api/cases")
@@ -1609,6 +1735,8 @@ def create_app(test_config=None):
                 (store.release_clarification if trial_kind == "clarification" else store.release_trial)(principal_scope(), trial_token)
             return error("analysis_rate_limited", "Limite orario raggiunto. Attendi prima di avviare altre analisi.", 429)
         try:
+            if not store.reserve_provider_request(provider_request_limit()):
+                return error("provider_request_cap_reached", "Limite totale delle richieste al motore raggiunto o non valido. Nessuna nuova richiesta è stata inviata.", 503)
             result = analizza_immagine(image, mime_type, context)
             if trial_token:
                 complete = store.complete_clarification if trial_kind == "clarification" else store.complete_trial

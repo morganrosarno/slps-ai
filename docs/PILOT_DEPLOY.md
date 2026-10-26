@@ -48,9 +48,21 @@ per il collaudo. Non apre il database in scrittura e non crea utenti. La
 registrazione aperta senza consegna è segnalata come blocco, non come servizio
 pronto. Il flusso completo è descritto in `docs/ACCOUNTS_LOCAL.md`.
 
-Senza volume persistente il pilota può funzionare, ma contatori, rapporti e file dello storico
-possono azzerarsi dopo riavvio o deploy. Non presentare quindi l'archivio come
-duraturo finché persistenza, backup e ripristino non sono stati provati.
+Gli adapter inclusi sono autorizzati solo per dati sintetici. Impostando
+`SLPS_DATA_MODE=real`, il processo e il preflight si arrestano finché non vengono
+integrati e collaudati adapter durevoli. Il solo acquisto di un volume non rimuove
+questo controllo. Seguire `docs/DURABLE_STORAGE_MIGRATION.md` e verificare
+persistenza, backup e ripristino prima di usare dati reali.
+
+Prima di una distribuzione riservata devono essere chiusi anche il controllo
+d'accesso all'intero ambiente e il limite totale di consumo: la protezione delle
+API e un limite orario non soddisfano da soli questi due requisiti. Questa
+procedura non dichiara che tali passaggi siano già completati.
+Il codice dei controlli è descritto in `docs/PRIVATE_STAGING_GATE.md`: abilitare
+`SLPS_PRIVATE_GATE_ENABLED`, configurare una password dedicata e impostare
+`SLPS_PROVIDER_REQUESTS_TOTAL`. Il contatore comprende anche chiarimenti ed
+errori; il numero di richieste non equivale a un tetto monetario. Il collaudo
+locale non prova ancora questi controlli nell'ambiente remoto.
 
 ## Controllo senza chiamate AI
 
@@ -73,9 +85,12 @@ La prima analisi reale si esegue soltanto dopo approvazione del tetto di spesa.
 
 ## Collaudo e ripristino
 
-Il collaudo completo è: login → foto autorizzata → analisi → chiarimenti →
-riesame → esportazione e stampa. Registrare commit, modello, esito e consumo
-reale senza conservare la fotografia nei log.
+Il collaudo completo comprende login → foto autorizzata → analisi → chiarimenti →
+riesame → riapertura dallo storico, oltre al video con audio. Nel gratuito,
+stampa e download del rapporto devono restare disabilitati. Registrare commit,
+modello, esito e consumo reale senza conservare la fotografia nei log.
+La matrice finita in `docs/STAGING_ACCEPTANCE.md` distingue i percorsi locali
+simulati dalle prove effettive necessarie per l'approvazione finale.
 
 Se il deploy non supera health check o login:
 

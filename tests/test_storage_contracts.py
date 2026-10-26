@@ -35,7 +35,7 @@ def _limit_adapter(tmp_path):
     [
         (_account_adapter, "accounts", (1, 2, 3)),
         (_case_adapter, "cases", (1, 2)),
-        (_limit_adapter, "limits", (1, 2, 3)),
+        (_limit_adapter, "limits", (1, 2, 3, 4)),
     ],
 )
 def test_sqlite_adapters_share_versioned_idempotent_migration_contract(
@@ -262,7 +262,7 @@ def test_historical_limit_database_bootstraps_without_data_loss(tmp_path):
     db.close()
 
     store = LimitStore(path)
-    assert store.schema_versions() == (1, 2, 3)
+    assert store.schema_versions() == (1, 2, 3, 4)
     with store.connect() as migrated:
         assert migrated.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
         assert migrated.execute("SELECT token FROM leases").fetchone()[0] == "synthetic-token"
