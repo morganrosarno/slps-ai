@@ -34,7 +34,7 @@
           <a class="button" href="{{ url_for('workspace') }}">Apri l’app <span aria-hidden="true">↗</span></a>
           <a class="text-link" href="#come-funziona">Scopri il percorso <span aria-hidden="true">↓</span></a>
         </div>
-        <p class="access-note">Accesso con la password del pilota.</p>
+        {% if accounts_mode %}<p class="access-note">Accesso con account personale e azienda verificata.{% if registration_open %} <a href="/register">Crea il tuo account aziendale →</a>{% else %} <a href="/account">Accedi al tuo account →</a>{% endif %}</p>{% else %}<p class="access-note">Accesso con la password del pilota.</p>{% endif %}
       </div>
 
       <figure class="process-visual" aria-labelledby="process-caption">

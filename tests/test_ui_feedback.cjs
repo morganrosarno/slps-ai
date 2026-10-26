@@ -12,7 +12,7 @@ const template = fs.readFileSync(path.join(root, 'templates/index.html'), 'utf8'
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function fixture({ reducedMotion = false, imageAvailable = false, initialCases = [], caseListStatus = 200, sessionResponses = [], deferHistory = false, sessionData = {} } = {}) {
-  const elements = new Map(), requests = [], historyGets = [], scrolls = [], exports = [], prints = [];
+  const elements = new Map(), requests = [], historyGets = [], scrolls = [], exports = [], prints = [], navigations = [];
   let currentCases = [...initialCases];
   let doc;
   class Element {
@@ -49,7 +49,7 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
   const session = { authenticated: true, configured: true, csrf: 'test-csrf', ...sessionData };
   let sessionReadCount = 0;
   const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
-  const context = { document: doc, window: { matchMedia: () => ({ matches: reducedMotion }), print() { prints.push(true); } }, URL: class extends URL { static createObjectURL(value) { if (value instanceof Blob) exports.push(value); return 'blob:test-photo'; } static revokeObjectURL() {} }, Blob, AbortController, FormData: class { append() {} }, setTimeout: callback => { callback(); }, console,
+  const context = { document: doc, window: { matchMedia: () => ({ matches: reducedMotion }), location: { assign: value => navigations.push(value) }, print() { prints.push(true); } }, URL: class extends URL { static createObjectURL(value) { if (value instanceof Blob) exports.push(value); return 'blob:test-photo'; } static revokeObjectURL() {} }, Blob, AbortController, FormData: class { append() {} }, setTimeout: callback => { callback(); }, console,
     fetch: async (url, options = {}) => {
       if (url === '/api/session') {
         if (sessionReadCount++ === 0) return response(session);
@@ -71,9 +71,42 @@ async function fixture({ reducedMotion = false, imageAvailable = false, initialC
     request.resolve(data, status); await tick(); await tick();
   }
   async function finish(data, status = 200) { await finishRequest('/analizza', data, status); }
-  return { $, doc, photo, video, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, session, Element };
+  return { $, doc, photo, video, submit, finish, finishRequest, requests, historyGets, scrolls, exports, prints, navigations, session, Element };
 }
 const report = (summary = 'Valid report') => ({ findings: [], questions: [], sources: [], summary });
+
+test('anonymous and pending company accounts return to the dedicated account page without fetching cases', async () => {
+  for (const sessionData of [
+    { auth_mode: 'accounts', authenticated: false },
+    { auth_mode: 'accounts', verification_required: true, account: { eligible_for_analysis: false } },
+    { auth_mode: 'accounts', verification_required: false, account: {} },
+  ]) {
+    const f = await fixture({ sessionData });
+    assert.deepEqual(f.navigations, ['/account']);
+    assert.equal(f.historyGets.length, 0);
+    assert.equal(f.$('workspace').hidden, true);
+    assert.equal(f.$('login-panel').hidden, true);
+  }
+});
+
+test('verified company accounts can enter the workspace and find the account link', async () => {
+  const f = await fixture({ sessionData: { auth_mode: 'accounts', verification_required: false, account: { eligible_for_analysis: true } } });
+  assert.deepEqual(f.navigations, []);
+  assert.equal(f.$('workspace').hidden, false);
+  assert.equal(f.$('account-link').hidden, false);
+  assert.equal(f.historyGets.length, 1);
+});
+
+test('an expired company session leaves the pilot login hidden and returns to account access', async () => {
+  const f = await fixture({
+    sessionData: { auth_mode: 'accounts', account: { eligible_for_analysis: true } },
+    sessionResponses: [{ data: { auth_mode: 'accounts', authenticated: false, csrf: 'rotated' } }],
+  });
+  f.photo(); await f.submit();
+  await f.finish({ error: { message: 'Session expired' } }, 401);
+  assert.deepEqual(f.navigations, ['/account']);
+  assert.equal(f.$('login-panel').hidden, true);
+});
 
 test('video intake is explicit but does not call the unavailable pipeline', async () => {
   const f = await fixture({ sessionData: { media: { image_max_bytes: 10485760, video_max_bytes: 52428800, video_analysis_enabled: false } } });

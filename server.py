@@ -1,4 +1,4 @@
-"""Single-owner SLPS pilot. No uploaded image is written to disk."""
+"""Private SLPS pilot with opt-in company accounts; photos stay in memory."""
 from datetime import timedelta
 from contextlib import contextmanager
 from functools import wraps
@@ -15,10 +15,11 @@ import time
 from urllib.parse import urlsplit
 import warnings
 
-from flask import Flask, Request, jsonify, render_template, request, session
+from flask import Flask, Request, jsonify, redirect, render_template, request, session
 from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
+from accounts import AccountConflict, AccountStore, normalize_email
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -365,6 +366,9 @@ def create_app(test_config=None):
     app.config.update(
         SECRET_KEY=os.getenv("SLPS_SESSION_SECRET"),
         PILOT_PASSWORD=os.getenv("SLPS_PILOT_PASSWORD"),
+        AUTH_MODE=os.getenv("SLPS_AUTH_MODE", "pilot"),
+        ACCOUNT_REGISTRATION_OPEN=os.getenv("SLPS_ACCOUNT_REGISTRATION_OPEN", "false").lower() == "true",
+        ACCOUNT_DB_PATH=os.getenv("SLPS_ACCOUNT_DB_PATH", str(Path(app.instance_path) / "accounts.sqlite3")),
         SESSION_COOKIE_SECURE=os.getenv("SLPS_COOKIE_SECURE", "true").lower() != "false",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
@@ -394,39 +398,71 @@ def create_app(test_config=None):
     case_store = CaseStore(app.config["CASE_DB_PATH"])
     app.extensions["limit_store"] = store
     app.extensions["case_store"] = case_store
+    accounts = AccountStore(app.config["ACCOUNT_DB_PATH"]) if app.config["AUTH_MODE"] == "accounts" else None
+    app.extensions["account_store"] = accounts
+
+    def account_mode():
+        return app.config["AUTH_MODE"] == "accounts"
+
+    def plan():
+        # A legacy pilot configuration must never grant account users internal access.
+        return "trial" if account_mode() else app.config["PILOT_PLAN"]
+
+    def trial_total():
+        return 1 if account_mode() else app.config["TRIAL_ANALYSES_TOTAL"]
 
     def auth_configured():
         secret = app.config.get("SECRET_KEY")
-        password = app.config.get("PILOT_PASSWORD")
-        tenant_id = app.config.get("PILOT_TENANT_ID")
-        owner_id = app.config.get("PILOT_OWNER_ID")
-        plan = app.config.get("PILOT_PLAN")
-        return bool(
+        common = bool(
             isinstance(secret, (str, bytes)) and len(secret) >= 32 and secret.strip()
-            and isinstance(password, str) and len(password) >= 16 and password.strip()
-            and isinstance(tenant_id, str) and PRINCIPAL_ID.fullmatch(tenant_id)
-            and isinstance(owner_id, str) and PRINCIPAL_ID.fullmatch(owner_id)
-            and plan in {"trial", "internal"}
+            and app.config["AUTH_MODE"] in {"pilot", "accounts"}
             and 0 <= app.config.get("TRIAL_ANALYSES_TOTAL", -1) <= 100
             and 1024 <= app.config.get("MAX_IMAGE_BYTES", 0) <= 100 * 1024 * 1024
             and 1024 <= app.config.get("MAX_VIDEO_BYTES", 0) <= 1024 * 1024 * 1024
             and 1 <= app.config.get("MAX_VIDEO_SECONDS", 0) <= 3600
         )
+        if account_mode():
+            return common and accounts is not None
+        password = app.config.get("PILOT_PASSWORD")
+        tenant_id, owner_id = app.config.get("PILOT_TENANT_ID"), app.config.get("PILOT_OWNER_ID")
+        return bool(common
+            and isinstance(password, str) and len(password) >= 16 and password.strip()
+            and isinstance(tenant_id, str) and PRINCIPAL_ID.fullmatch(tenant_id)
+            and isinstance(owner_id, str) and PRINCIPAL_ID.fullmatch(owner_id)
+            and app.config.get("PILOT_PLAN") in {"trial", "internal"})
+
+    def validate_session_mode():
+        if session.get("authenticated") and session.get("auth_mode") != app.config["AUTH_MODE"]:
+            session.clear()
+
+    def current_account():
+        validate_session_mode()
+        if not account_mode() or not session.get("authenticated"):
+            return None
+        user = accounts.get_user(session.get("account_user_id"))
+        if not user or session.get("account_session_version") != user["session_version"]:
+            session.clear()
+            return None
+        # Always restore trusted identity from storage, not request/cookie fields.
+        session["tenant_id"], session["owner_id"] = user["company_id"], user["id"]
+        return user
 
     def principal_scope():
+        if account_mode():
+            return "company:" + session.get("tenant_id", "")
         return f'{session.get("tenant_id", "")}:{session.get("owner_id", "")}'
 
     def entitlement():
-        plan = app.config["PILOT_PLAN"]
-        if plan != "trial":
+        current_plan = plan()
+        if current_plan != "trial":
             return {
-                "plan": plan,
+                "plan": current_plan,
                 "analyses_total": None,
                 "analyses_used": None,
                 "analyses_remaining": None,
                 "export_allowed": True,
             }
-        total = app.config["TRIAL_ANALYSES_TOTAL"]
+        total = trial_total()
         used, remaining = store.trial_status(principal_scope(), total)
         clarification_used, clarification_remaining = store.clarification_status(principal_scope())
         return {
@@ -456,9 +492,17 @@ def create_app(test_config=None):
             "auth_configured": True,
             "analysis_configured": ready,
             "media": media_capabilities(),
+            "auth_mode": app.config["AUTH_MODE"],
+            "registration_open": bool(account_mode() and app.config["ACCOUNT_REGISTRATION_OPEN"]),
+            "delivery_configured": False,
         }
         if authenticated:
             payload["entitlement"] = entitlement()
+            if account_mode():
+                public = accounts.public(current_account())
+                payload["account"] = public
+                payload["verification_required"] = not bool(public and public["eligible_for_analysis"])
+                payload["configured"] = bool(ready and not payload["verification_required"])
         return payload
 
     def error(code, message, status, **extra):
@@ -481,17 +525,37 @@ def create_app(test_config=None):
         except ValueError:
             return False
 
-    def protect(fn):
-        @wraps(fn)
-        def wrapped(*args, **kwargs):
-            if not auth_configured():
-                return error("configuration_missing", "Accesso pilota non ancora configurato.", 503)
-            if not session.get("authenticated") or not session.get("tenant_id") or not session.get("owner_id"):
-                return error("authentication_required", "Accedi per utilizzare il progetto pilota.", 401)
-            if not same_origin() or not csrf_valid():
-                return error("invalid_csrf", "Sessione scaduta: ricarica la pagina e riprova.", 403)
-            return fn(*args, **kwargs)
-        return wrapped
+    def protect(fn=None, *, allow_unverified=False):
+        def decorator(view):
+            @wraps(view)
+            def wrapped(*args, **kwargs):
+                if not auth_configured():
+                    return error("configuration_missing", "Accesso non ancora configurato.", 503)
+                validate_session_mode()
+                user = current_account() if account_mode() else None
+                if (account_mode() and not user) or not session.get("authenticated") or not session.get("tenant_id") or not session.get("owner_id"):
+                    return error("authentication_required", "Accedi per utilizzare il progetto pilota.", 401)
+                if not same_origin() or not csrf_valid():
+                    return error("invalid_csrf", "Sessione scaduta: ricarica la pagina e riprova.", 403)
+                if account_mode() and not allow_unverified and not accounts.public(user)["eligible_for_analysis"]:
+                    return error("account_verification_required", "Completa la verifica dell’email, dell’azienda e del tuo ruolo prima di analizzare o aprire casi.", 403)
+                return view(*args, **kwargs)
+            return wrapped
+        return decorator(fn) if fn is not None else decorator
+
+    def account_request():
+        if not auth_configured() or not account_mode():
+            return error("account_service_unavailable", "Registrazione account non disponibile in questo ambiente.", 503)
+        if not same_origin() or not csrf_valid():
+            return error("invalid_csrf", "Ricarica la pagina prima di continuare.", 403)
+        if request.content_length and request.content_length > 8192:
+            return error("invalid_request", "Richiesta troppo grande.", 400)
+        if not isinstance(request.get_json(silent=True), dict):
+            return error("invalid_request", "Richiesta non valida.", 400)
+        return None
+
+    def attempt_scope(kind):
+        return kind + ":" + hmac.new(str(app.config["SECRET_KEY"]).encode(), (request.remote_addr or "unknown").encode(), hashlib.sha256).hexdigest()
 
     @app.after_request
     def security_headers(response):
@@ -507,11 +571,23 @@ def create_app(test_config=None):
 
     @app.get("/")
     def home():
-        return render_template("landing.html")
+        return render_template("landing.html", accounts_mode=account_mode(),
+                               registration_open=bool(account_mode() and auth_configured() and app.config["ACCOUNT_REGISTRATION_OPEN"]))
+
+    @app.get("/register")
+    @app.get("/account")
+    def account_page():
+        return render_template("account.html")
 
     @app.get("/app/")
     @app.get("/app")
     def workspace():
+        if account_mode():
+            if not auth_configured():
+                return redirect("/account")
+            user = current_account()
+            if not user or not accounts.public(user)["eligible_for_analysis"]:
+                return redirect("/account")
         return render_template("index.html")
 
     @app.get("/healthz")
@@ -522,7 +598,10 @@ def create_app(test_config=None):
     def session_info():
         ready = is_analysis_configured()
         if not auth_configured():
-            return jsonify(authenticated=False, csrf=None, configured=False, auth_configured=False, analysis_configured=ready, media=media_capabilities())
+            return jsonify(authenticated=False, csrf=None, configured=False, auth_configured=False, analysis_configured=ready, media=media_capabilities(), auth_mode=app.config["AUTH_MODE"], registration_open=False)
+        validate_session_mode()
+        if account_mode():
+            current_account()
         if "csrf" not in session:
             session["csrf"] = secrets.token_urlsafe(32)
         return jsonify(**session_payload(bool(session.get("authenticated")), session["csrf"], ready))
@@ -533,26 +612,108 @@ def create_app(test_config=None):
             return error("configuration_missing", "Accesso pilota non ancora configurato.", 503)
         if not same_origin() or not csrf_valid():
             return error("invalid_csrf", "Ricarica la pagina prima di accedere.", 403)
+        if account_mode() and request.content_length and request.content_length > 8192:
+            return error("invalid_request", "Richiesta troppo grande.", 400)
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or not isinstance(payload.get("password"), str) or len(payload["password"]) > 1024:
             return error("invalid_request", "Inserisci la password di accesso.", 400)
-        success = hmac.compare_digest(payload["password"].encode(), str(app.config["PILOT_PASSWORD"]).encode())
         scope = hmac.new(str(app.config["SECRET_KEY"]).encode(), (request.remote_addr or "unknown").encode(), hashlib.sha256).hexdigest()
-        if not store.login(scope, success):
-            return error("login_rate_limited", "Troppi tentativi. Attendi 15 minuti prima di riprovare.", 429)
+        if account_mode():
+            # Reject throttled attempts before the intentionally expensive hash.
+            try:
+                email_identity = normalize_email(payload.get("email"))
+            except ValueError:
+                email_identity = "invalid"
+            email_scope = "account-login:" + hmac.new(
+                str(app.config["SECRET_KEY"]).encode(), email_identity.encode(), hashlib.sha256
+            ).hexdigest()
+            if not store.login(scope, False) or not store.login(email_scope, False):
+                return error("login_rate_limited", "Troppi tentativi. Attendi 15 minuti prima di riprovare.", 429)
+            user = accounts.authenticate(payload.get("email"), payload["password"])
+            success = bool(user)
+            if success:
+                with store.connect() as db:
+                    db.execute("DELETE FROM events WHERE kind='login' AND scope IN (?, ?)", (scope, email_scope))
+        else:
+            user = None
+            success = hmac.compare_digest(payload["password"].encode(), str(app.config["PILOT_PASSWORD"]).encode())
+            if not store.login(scope, success):
+                return error("login_rate_limited", "Troppi tentativi. Attendi 15 minuti prima di riprovare.", 429)
         if not success:
             return error("invalid_credentials", "Password non valida.", 401)
         session.clear()
         session.permanent = True
         session["authenticated"] = True
-        session["tenant_id"] = app.config["PILOT_TENANT_ID"]
-        session["owner_id"] = app.config["PILOT_OWNER_ID"]
+        session["auth_mode"] = app.config["AUTH_MODE"]
+        if account_mode():
+            session["account_user_id"] = user["id"]
+            session["account_session_version"] = user["session_version"]
+            session["tenant_id"], session["owner_id"] = user["company_id"], user["id"]
+        else:
+            session["tenant_id"] = app.config["PILOT_TENANT_ID"]
+            session["owner_id"] = app.config["PILOT_OWNER_ID"]
         session["csrf"] = secrets.token_urlsafe(32)
         ready = is_analysis_configured()
         return jsonify(**session_payload(True, session["csrf"], ready))
 
+    @app.post("/api/accounts/register")
+    def register_account():
+        failure = account_request()
+        if failure:
+            return failure
+        if not app.config["ACCOUNT_REGISTRATION_OPEN"]:
+            return error("registration_closed", "La registrazione non è ancora aperta.", 503)
+        if not store.login(attempt_scope("registration"), False):
+            return error("registration_rate_limited", "Troppi tentativi. Riprova più tardi.", 429)
+        data = request.get_json()
+        try:
+            accounts.register(email=data.get("email"), password=data.get("password"),
+                              company_name=data.get("company_name"), company_identifier=data.get("company_identifier", ""),
+                              role=data.get("role"), locale=data.get("locale", "it"))
+        except AccountConflict:
+            return error("registration_unavailable", "Registrazione non disponibile con questi dati. Accedi oppure richiedi assistenza per l’azienda esistente.", 409)
+        except (ValueError, TypeError):
+            return error("invalid_registration", "Controlla email, azienda, ruolo, lingua e password (16–256 caratteri).", 400)
+        return jsonify(registered=True, verification_required=True, delivery_configured=False), 202
+
+    @app.post("/api/accounts/verify-email")
+    def verify_account_email():
+        failure = account_request()
+        if failure:
+            return failure
+        if not store.login(attempt_scope("verify"), False, limit=10):
+            return error("verification_rate_limited", "Troppi tentativi. Riprova più tardi.", 429)
+        if not accounts.consume_token(request.get_json().get("token"), "email"):
+            return error("invalid_token", "Codice non valido o scaduto.", 400)
+        return jsonify(email_verified=True, company_verification_required=True)
+
+    @app.post("/api/accounts/password-reset")
+    def request_password_reset():
+        failure = account_request()
+        if failure:
+            return failure
+        if not store.login(attempt_scope("reset-request"), False):
+            return error("reset_rate_limited", "Troppi tentativi. Riprova più tardi.", 429)
+        # No delivery adapter exists yet. Never return or persist plaintext tokens,
+        # and never pretend that a reset email was sent.
+        return jsonify(accepted=True, delivery_configured=False,
+                       message="Se l’account esiste, il recupero richiede il canale di consegna riservato; l’invio email non è attivo in questo ambiente."), 202
+
+    @app.post("/api/accounts/password-reset/confirm")
+    def confirm_password_reset():
+        failure = account_request()
+        if failure:
+            return failure
+        if not store.login(attempt_scope("reset-confirm"), False):
+            return error("reset_rate_limited", "Troppi tentativi. Riprova più tardi.", 429)
+        data = request.get_json()
+        if not accounts.consume_token(data.get("token"), "reset", data.get("password")):
+            return error("invalid_token", "Codice non valido/scaduto o password non valida (16–256 caratteri).", 400)
+        session.clear()
+        return jsonify(reset=True, authenticated=False)
+
     @app.post("/api/logout")
-    @protect
+    @protect(allow_unverified=True)
     def logout():
         session.clear()
         return jsonify(authenticated=False)
@@ -652,10 +813,10 @@ def create_app(test_config=None):
         trial_token = None
         trial_kind = None
         trial_completed = False
-        if app.config["PILOT_PLAN"] == "trial":
+        if plan() == "trial":
             if request_kind == "clarification":
                 used, _remaining = store.trial_status(
-                    principal_scope(), app.config["TRIAL_ANALYSES_TOTAL"]
+                    principal_scope(), trial_total()
                 )
                 if used < 1:
                     return error(
@@ -671,7 +832,7 @@ def create_app(test_config=None):
                 trial_kind = "analysis"
                 trial_token, trial_failure = store.reserve_trial(
                     principal_scope(),
-                    app.config["TRIAL_ANALYSES_TOTAL"],
+                    trial_total(),
                     app.config["ANALYSIS_LEASE_SECONDS"],
                 )
             if trial_failure == "busy":
@@ -727,7 +888,7 @@ def create_app(test_config=None):
                     "clarification_available": False,
                     "message": "Risultato non archiviato per un problema temporaneo.",
                 }
-            if app.config["PILOT_PLAN"] == "trial" and not archive["saved"]:
+            if plan() == "trial" and not archive["saved"]:
                 archive["message"] = (
                     archive.get("message", "Risultato non archiviato.")
                     + " Il chiarimento incluso richiede un caso salvato e non è disponibile per questo risultato."

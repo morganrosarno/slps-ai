@@ -9,8 +9,14 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 - Il file originale non viene modificato; solo il changelog storico è escluso dalla richiesta al modello.
 - Risultato strutturato con evidenze, incertezze, azioni, termini, domande e ritagli della foto.
 - Accesso con password, CSRF, quota oraria e una sola analisi simultanea.
+- Modalità account aziendali opzionale, con registrazione chiusa per default,
+  credenziali personali e verifiche distinte di email, azienda e rappresentanza.
+  Le nuove schermate di registrazione e stato account sono in IT/DE/FR/EN;
+  il resto del sito e dell'app non è ancora interamente tradotto.
 - Fondazione della prova gratuita: una sola analisi riuscita totale per azienda/proprietario,
   bloccata atomicamente prima della chiamata al fornitore; gli errori non consumano la prova.
+  In modalità account la prova è condivisa da tutti gli utenti autorizzati della stessa
+  azienda, indipendentemente dalle vecchie impostazioni del pilota.
 - Un ciclo di chiarimento sul caso salvato è incluso e conteggiato separatamente. Ulteriori
   chiarimenti e nuove analisi sono bloccati prima della chiamata al fornitore. Il chiarimento
   accetta soltanto la stessa immagine normalizzata: nell'archivio resta la sua impronta
@@ -78,13 +84,19 @@ SQLite conserva anche contatori e impronte degli indirizzi per i limiti; i recor
 sono rimossi alle richieste successive. SLPS_RATE_DB_PATH e SLPS_CASE_DB_PATH devono stare
 su un volume persistente se limiti e casi devono sopravvivere ai redeploy. Un solo server
 applicativo è supportato in questa fase.
-L'isolamento applicativo per azienda/proprietario è implementato e coperto da test, ma il
-pilota espone ancora un solo account configurato dal server. Mancano gestione account,
-assegnazione e chiusura delle misure, backup/ripristino e verifica di persistenza sul provider.
+L'isolamento applicativo per azienda/proprietario è implementato e coperto da test.
+La modalità predefinita conserva l'accesso singolo del pilota. La modalità opzionale
+account aggiunge identità aziendali e personali, ma l'archivio dei casi resta anche
+separato per proprietario: la condivisione dei casi fra colleghi non è ancora implementata.
+Mancano assegnazione e chiusura delle misure, backup/ripristino e verifica di persistenza sul provider.
 Non usarlo ancora come archivio aziendale di produzione.
 
-La registrazione self-service non è stata aggiunta: introdurla senza verifica dell'indirizzo,
-recupero credenziali e separazione affidabile degli account sarebbe insicuro. Il questionario
+La fondazione della registrazione self-service è descritta in `docs/ACCOUNTS_LOCAL.md`.
+È disattivata per default; nel collaudo locale l'invio email e la verifica reale
+dell'azienda non sono collegati. Nessun account in attesa può accedere ad analisi o casi.
+Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
+il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
+espone un token o finge di aver inviato un'email. Il questionario
 azienda e l'eventuale escalation a uno specialista restano una struttura di prodotto da
 validare; non è codificata alcuna determinazione legale automatica CFSL 6508.
 
@@ -92,7 +104,8 @@ validare; non è codificata alcuna determinazione legale automatica CFSL 6508.
 Installa requirements-dev.txt ed esegui:
 python -m pytest -q
 node --check static/app.js
-node --test tests/test_ui_feedback.cjs
+node --check static/account.js
+node --test tests/test_ui_feedback.cjs tests/test_account_ui.cjs
 python -m unittest -q tests.test_preflight
 python scripts/preflight.py
 

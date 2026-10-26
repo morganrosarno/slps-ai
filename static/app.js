@@ -71,11 +71,20 @@
     return data;
   }
   function applySession(data) {
+    // Account verification is enforced by the server; keep its pending states
+    // on the dedicated account page instead of exposing the pilot login form.
+    if (data.auth_mode === 'accounts' && (!data.authenticated || data.verification_required || data.account?.eligible_for_analysis !== true)) {
+      state.authenticated = false; state.csrf = data.csrf || ''; state.configured = false;
+      $('login-panel').hidden = true; $('workspace').hidden = true; $('logout').hidden = true;
+      $('account-link').hidden = true;
+      resetHistory(); window.location.assign('/account'); return;
+    }
     const wasAuthenticated = state.authenticated;
     state.authenticated = Boolean(data.authenticated); state.csrf = data.csrf || ''; state.configured = Boolean(data.configured);
     if (data.entitlement) state.entitlement = { ...state.entitlement, ...data.entitlement };
     if (data.media) state.media = { ...state.media, ...data.media };
     $('login-panel').hidden = state.authenticated; $('workspace').hidden = !state.authenticated; $('logout').hidden = !state.authenticated;
+    $('account-link').hidden = data.auth_mode !== 'accounts' || !state.authenticated;
     $('login-button').disabled = data.auth_configured === false;
     if (!state.authenticated && data.auth_configured === false) notice('L’accesso al pilota non è ancora configurato. Completa la configurazione riservata del servizio prima di utilizzarlo.', 'warning');
     if (state.authenticated && !state.configured) notice('Il pilota è accessibile, ma la configurazione per l’analisi non è completa. La fotografia non verrà inviata finché il servizio non sarà configurato.', 'warning');
