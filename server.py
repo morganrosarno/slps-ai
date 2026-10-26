@@ -23,6 +23,8 @@ from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
 from accounts import (AccountConflict, AccountStore, BillingSandboxConflict,
                       ConsultationConflict, billing_catalog, normalize_email)
 from media import MediaError, inspect_video, media_tools_available
+from video_analysis import (SyntheticVideoAdapters, VideoAnalysisError,
+                            analyze_extracted_video)
 from storage_contracts import (LocalBlobStore, SQLiteMigration,
                                apply_sqlite_migrations, migration_versions,
                                require_durable_storage)
@@ -815,6 +817,7 @@ def create_app(test_config=None):
         PILOT_PLAN=os.getenv("SLPS_PILOT_PLAN", "trial"),
         TRIAL_ANALYSES_TOTAL=int(os.getenv("SLPS_TRIAL_ANALYSES_TOTAL", "1")),
         ANALYSIS_LEASE_SECONDS=180,
+        VIDEO_ANALYSIS_SYNTHETIC_ENABLED=False,
     )
     if test_config:
         app.config.update(test_config)
@@ -1622,6 +1625,144 @@ def create_app(test_config=None):
             trial_consumed=False,
             message=message + " L’analisi AI e la trascrizione non sono ancora state eseguite.",
         )
+
+    @app.post("/api/media/cases/<case_id>/analyze")
+    @protect
+    def analyze_archived_video_synthetic(case_id):
+        adapters = app.extensions.get("video_analysis_adapters")
+        if (app.testing is not True or app.config["DATA_MODE"] != "synthetic"
+                or app.config["VIDEO_ANALYSIS_SYNTHETIC_ENABLED"] is not True
+                or not isinstance(adapters, SyntheticVideoAdapters)):
+            return error("video_synthetic_analysis_disabled", "Il percorso sintetico di analisi video non è attivo. Nessuna analisi AI reale è stata eseguita.", 503)
+        cap = provider_request_limit()
+        if cap is None or cap == 0:
+            return error("provider_request_cap_required", "Serve un limite esplicito per contare ogni richiesta sintetica.", 503)
+        if len(case_id) > 64 or (request.content_length or 0) > 16384:
+            return error("invalid_video_request", "Richiesta video non valida.", 400)
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return error("invalid_video_request", "Richiesta video non valida.", 400)
+        source = case_store.get(case_id, session["tenant_id"], session["owner_id"])
+        if not source:
+            return error("case_not_found", "Caso non disponibile.", 404)
+        context = payload.get("context", source["context"])
+        if not isinstance(context, str) or len(context) > MAX_CONTEXT_CHARS:
+            return error("invalid_context", "Il contesto deve contenere al massimo 8000 caratteri.", 400)
+        try:
+            meta = source["analysis"]["meta"]
+            inspection = meta["video_inspection"]
+            metadata_frames = inspection["frames"]
+            if (meta["case_kind"] != "video_technical_verification" or inspection["validated"] is not True
+                    or not isinstance(metadata_frames, list) or not 1 <= len(metadata_frames) <= 10):
+                raise ValueError()
+            frame_assets = [asset for asset in source["assets"] if asset["role"] == "frame"]
+            audio_assets = [asset for asset in source["assets"] if asset["role"] == "audio"]
+            if len(frame_assets) != len(metadata_frames) or len(audio_assets) > 1:
+                raise ValueError()
+            def read_evidence(asset, maximum):
+                private = case_store.asset(case_id, asset["id"], session["tenant_id"], session["owner_id"])
+                if not private or not 0 < private["byte_size"] <= maximum:
+                    raise ValueError()
+                with private["path"].open("rb") as stream:
+                    data = stream.read(maximum + 1)
+                if len(data) != private["byte_size"] or hashlib.sha256(data).hexdigest() != private["sha256"]:
+                    raise ValueError()
+                return data
+            extracted_frames = []
+            for index, frame in enumerate(metadata_frames, start=1):
+                timestamp = frame["timestamp_seconds"]
+                if type(timestamp) not in {int, float} or not 0 <= timestamp <= app.config["MAX_VIDEO_SECONDS"]:
+                    raise ValueError()
+                filename = f"frame-{index:02d}-{timestamp:.3f}s.jpg"
+                matching = [asset for asset in frame_assets if asset["filename"] == filename and asset["media_type"] == "image/jpeg"]
+                if len(matching) != 1:
+                    raise ValueError()
+                asset = matching[0]
+                extracted_frames.append({"timestamp_seconds": timestamp, "asset_id": asset["id"],
+                                         "data": read_evidence(asset, 2_000_000), "media_type": asset["media_type"]})
+            audio = dict(inspection["audio"])
+            if audio.get("status") == "absent" and audio_assets:
+                raise ValueError()
+            if audio_assets:
+                audio["data"] = read_evidence(audio_assets[0], 2_500_000)
+                audio["media_type"] = audio_assets[0]["media_type"]
+            evidence = {"duration_seconds": inspection["duration_seconds"], "frames": extracted_frames, "audio": audio}
+        except (ValueError, KeyError, TypeError, OSError):
+            return error("video_evidence_invalid", "Le evidenze archiviate non sono disponibili o integre. Nessuna analisi complessiva confermata.", 422)
+        # Even an internal pilot uses one trial for this synthetic company flow.
+        trial_token, failure = store.reserve_trial(principal_scope(), 1, app.config["ANALYSIS_LEASE_SECONDS"])
+        if failure:
+            return error("analysis_busy" if failure == "busy" else "trial_exhausted", "Un’analisi è in corso oppure la prova aziendale è già stata utilizzata.", 409 if failure == "busy" else 402)
+        analysis_token = None
+        completed, result_case_id = False, None
+        try:
+            analysis_token, failure = store.reserve_analysis(app.config["ANALYSES_PER_HOUR"], app.config["ANALYSIS_LEASE_SECONDS"])
+            if failure:
+                return error("analysis_busy" if failure == "busy" else "analysis_rate_limited", "Non è possibile avviare un’altra elaborazione in questo momento.", 409 if failure == "busy" else 429)
+            result = analyze_extracted_video(
+                evidence, adapters=adapters, context=context,
+                source_registry=app.extensions.get("video_analysis_sources", ()),
+                reserve_request=lambda: store.reserve_provider_request(cap),
+                max_seconds=app.config["MAX_VIDEO_SECONDS"],
+            )
+            result["meta"]["source_case_id"] = case_id
+            result_case_id, archive_failure = case_store.create(
+                session["tenant_id"], session["owner_id"], context, result, None,
+                app.config["MAX_CASES_PER_OWNER"],
+            )
+            if archive_failure or not result_case_id:
+                raise VideoAnalysisError("video_result_not_saved", "Il rapporto sintetico non è stato salvato; la prova aziendale non è consumata.", 503)
+            try:
+                trial_confirmed = store.complete_trial(principal_scope(), trial_token)
+            except (sqlite3.Error, OSError):
+                # A failed acknowledgement does not prove that the durable
+                # transaction rolled back. Keep the saved report recoverable.
+                app.logger.warning("Synthetic video trial completion outcome is unknown")
+                return error(
+                    "trial_completion_unknown",
+                    "Rapporto sintetico salvato; esito quota da verificare prima di un nuovo tentativo.",
+                    503, trial_consumed=None, source_case_id=case_id,
+                    archive={"saved": True, "case_id": result_case_id, "kind": "video_synthetic_analysis"},
+                    execution_mode="synthetic_adapters", real_ai_analysis=False,
+                )
+            if not trial_confirmed:
+                case_store.delete(result_case_id, session["tenant_id"], session["owner_id"])
+                raise VideoAnalysisError("video_trial_not_confirmed", "La prenotazione della prova non è stata confermata.", 503)
+            completed = True
+        except VideoAnalysisError as exc:
+            return error(exc.code, str(exc), exc.status)
+        except (ValueError, TypeError, sqlite3.Error, OSError):
+            return error("video_analysis_failed", "Elaborazione sintetica non confermata; nessuna nuova prova consumata.", 503)
+        finally:
+            # Lease cleanup is idempotent and never refunds trial usage. A
+            # cleanup failure must not replace a known or uncertain outcome.
+            if analysis_token:
+                try:
+                    store.release_analysis(analysis_token)
+                except (sqlite3.Error, OSError):
+                    app.logger.warning("Synthetic video analysis lease cleanup deferred")
+            if not completed:
+                try:
+                    store.release_trial(principal_scope(), trial_token)
+                except (sqlite3.Error, OSError):
+                    app.logger.warning("Synthetic video trial lease cleanup deferred")
+        # The report and trial use are committed at this point. A secondary
+        # status refresh must never turn that outcome into a rollback claim.
+        try:
+            refreshed_entitlement = entitlement()
+            entitlement_status = {"available": True}
+        except (ValueError, TypeError, sqlite3.Error, OSError):
+            app.logger.warning("Trial status unavailable after committed synthetic video analysis")
+            refreshed_entitlement = None
+            entitlement_status = {
+                "available": False,
+                "message": "Rapporto salvato e prova aziendale utilizzata; lo stato dell’abbonamento non è temporaneamente disponibile.",
+            }
+        return jsonify(analysis=result, source_case_id=case_id,
+                       archive={"saved": True, "case_id": result_case_id, "kind": "video_synthetic_analysis"},
+                       execution_mode="synthetic_adapters", real_ai_analysis=False,
+                       trial_consumed=True, entitlement=refreshed_entitlement,
+                       entitlement_status=entitlement_status)
 
     @app.post("/analizza")
     @protect
