@@ -20,7 +20,8 @@ from flask import Flask, Request, jsonify, redirect, render_template, request, s
 from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
-from accounts import AccountConflict, AccountStore, ConsultationConflict, normalize_email
+from accounts import (AccountConflict, AccountStore, BillingSandboxConflict,
+                      ConsultationConflict, billing_catalog, normalize_email)
 from media import MediaError, inspect_video, media_tools_available
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -744,6 +745,7 @@ def create_app(test_config=None):
         PILOT_PASSWORD=os.getenv("SLPS_PILOT_PASSWORD"),
         AUTH_MODE=os.getenv("SLPS_AUTH_MODE", "pilot"),
         ACCOUNT_REGISTRATION_OPEN=os.getenv("SLPS_ACCOUNT_REGISTRATION_OPEN", "false").lower() == "true",
+        BILLING_SANDBOX_ENABLED=os.getenv("SLPS_BILLING_SANDBOX_ENABLED", "false").lower() == "true",
         ACCOUNT_DB_PATH=os.getenv("SLPS_ACCOUNT_DB_PATH", str(Path(app.instance_path) / "accounts.sqlite3")),
         SESSION_COOKIE_SECURE=os.getenv("SLPS_COOKIE_SECURE", "true").lower() != "false",
         SESSION_COOKIE_HTTPONLY=True,
@@ -933,6 +935,15 @@ def create_app(test_config=None):
             return wrapped
         return decorator(fn) if fn is not None else decorator
 
+    def billing_sandbox(view):
+        """Hide every sandbox route unless the explicit local flag is enabled."""
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if not app.config.get("BILLING_SANDBOX_ENABLED") or not account_mode():
+                return error("billing_sandbox_unavailable", "Simulazione non disponibile.", 404)
+            return view(*args, **kwargs)
+        return wrapped
+
     def account_request():
         if not auth_configured() or not account_mode():
             return error("account_service_unavailable", "Registrazione account non disponibile in questo ambiente.", 503)
@@ -1118,6 +1129,74 @@ def create_app(test_config=None):
 
     def consultation_state(user):
         return accounts.consultation_status(user["company_id"], user["id"])
+
+    def checkout_state(checkout_id, user):
+        state = accounts.get_checkout_simulation(checkout_id, user["company_id"], user["id"])
+        if not state:
+            return error("checkout_not_found", "Simulazione non disponibile.", 404)
+        return jsonify(checkout=state)
+
+    @app.get("/api/sandbox/billing/plans")
+    @billing_sandbox
+    @protect(require_csrf=False)
+    def sandbox_billing_plans():
+        return jsonify(**billing_catalog())
+
+    @app.post("/api/sandbox/billing/checkout-simulations")
+    @billing_sandbox
+    @protect
+    def create_checkout_simulation():
+        data = request.get_json(silent=True)
+        allowed = {"plan_code", "billing_cycle"}
+        if (not isinstance(data, dict) or set(data) - allowed or set(data) != allowed or
+                (request.content_length and request.content_length > 2048)):
+            return error("invalid_checkout", "Selezione non valida; i dati di pagamento non sono accettati.", 400)
+        key = request.headers.get("Idempotency-Key", "")
+        if not 12 <= len(key) <= 128:
+            return error("invalid_idempotency_key", "Chiave di ripetizione non valida.", 400)
+        user = current_account()
+        try:
+            state = accounts.create_checkout_simulation(
+                user["company_id"], user["id"], data.get("plan_code"),
+                data.get("billing_cycle"), idempotency_key=key,
+            )
+        except BillingSandboxConflict as exc:
+            if str(exc) == "idempotency_mismatch":
+                return error("idempotency_mismatch", "Richiesta duplicata non coerente.", 409)
+            return error("checkout_unavailable", "Simulazione non disponibile.", 409)
+        except (ValueError, TypeError):
+            return error("invalid_checkout", "Piano o ciclo non valido.", 400)
+        replay = state.pop("idempotent_replay", False)
+        return jsonify(checkout=state), 200 if replay else 201
+
+    @app.get("/api/sandbox/billing/checkout-simulations/<checkout_id>")
+    @billing_sandbox
+    @protect(require_csrf=False)
+    def get_checkout_simulation(checkout_id):
+        return checkout_state(checkout_id, current_account())
+
+    def transition_checkout(checkout_id, target):
+        user = current_account()
+        try:
+            state = accounts.transition_checkout_simulation(
+                checkout_id, user["company_id"], user["id"], target,
+            )
+        except (BillingSandboxConflict, ValueError):
+            return error("checkout_not_found", "Simulazione non disponibile o già conclusa.", 404)
+        replay = state.pop("idempotent_replay", False)
+        return jsonify(checkout=state, idempotent_replay=replay)
+
+    @app.post("/api/sandbox/billing/checkout-simulations/<checkout_id>/confirm")
+    @billing_sandbox
+    @protect
+    def confirm_checkout_simulation(checkout_id):
+        return transition_checkout(checkout_id, "confirmed_simulation")
+
+    @app.post("/api/sandbox/billing/checkout-simulations/<checkout_id>/cancel")
+    @billing_sandbox
+    @protect
+    def cancel_checkout_simulation(checkout_id):
+        return transition_checkout(checkout_id, "cancelled")
 
     @app.get("/api/consultations")
     @protect(require_csrf=False)

@@ -39,6 +39,10 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
 - Sito di presentazione su `/` e interfaccia autenticata su `/app/`, nello stesso servizio.
 - Navigazione tra nuova analisi e archivio, passaggi foto/contesto/risultato e rapporto operativo.
+- Checkout locale di prova, disattivato per default e separato sotto
+  `/api/sandbox/billing`: catalogo non approvato, snapshot immutabile,
+  idempotenza e isolamento azienda/proprietario. Non accetta carte, non chiama
+  provider, non addebita e non modifica piano o quote di analisi.
 
 ## Avvio locale
 Python 3.12, `ffmpeg` e `ffprobe` sono richiesti e verificati durante lo sviluppo.
@@ -117,6 +121,9 @@ fatturazione può riservare una richiesta di contatto legata a un caso autorizza
 senza mostrare recapiti, inviare messaggi, effettuare chiamate o addebitare importi.
 La cadenza resta un'ipotesi configurabile; non è codificata alcuna determinazione
 legale automatica CFSL 6508. Dettagli e limiti sono in `docs/CONSULTATIONS_LOCAL.md`.
+La migrazione necessaria prima di dati reali è descritta in
+`docs/DURABLE_STORAGE_MIGRATION.md`. L'attuale filesystem Render free è
+effimero e non costituisce uno storico aziendale durevole.
 
 ## Verifica
 Installa requirements-dev.txt ed esegui:

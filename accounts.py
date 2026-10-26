@@ -6,6 +6,7 @@ operator/delivery-adapter primitive, never a token-disclosing HTTP endpoint.
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
 import re
 import secrets
@@ -61,6 +62,60 @@ class AccountConflict(ValueError):
 
 class ConsultationConflict(ValueError):
     """A consultation entitlement cannot be reserved or transitioned."""
+
+
+class BillingSandboxConflict(ValueError):
+    """A non-transactional checkout simulation cannot be created or changed."""
+
+
+BILLING_CATALOG_REVISION = "draft-2026-10-26-v1"
+BILLING_CYCLES = {"monthly", "annual"}
+BILLING_PLAN_CODES = {
+    "tier_essential_v1", "tier_team_v1", "tier_partner_v1",
+}
+
+
+def billing_catalog():
+    """Return the immutable draft used by the local checkout simulation.
+
+    Names, prices, VAT and quota periods deliberately remain unapproved.  The
+    stable codes can survive later copy changes without pretending that a
+    commercial offer already exists.
+    """
+    plans = [{
+        "plan_code": "trial_company_v1",
+        "display_name": "Prova aziendale (bozza)",
+        "selectable": False,
+        "billing_cycles": [],
+        "price": {"amount_chf": None, "status": "draft_unapproved"},
+        "quota": {"analyses": 1, "period": "once_per_verified_company"},
+        "video_status": "not_for_sale",
+        "specialist_policy": "not_included",
+    }]
+    labels = {
+        "tier_essential_v1": "Piano 1 (nome da approvare)",
+        "tier_team_v1": "Piano 2 (nome da approvare)",
+        "tier_partner_v1": "Piano 3 (nome da approvare)",
+    }
+    for code in ("tier_essential_v1", "tier_team_v1", "tier_partner_v1"):
+        plans.append({
+            "plan_code": code,
+            "display_name": labels[code],
+            "selectable": True,
+            "billing_cycles": ["monthly", "annual"],
+            "price": {"amount_chf": None, "status": "draft_unapproved"},
+            "quota": {"analyses": None, "period": "TBD"},
+            "video_status": "not_for_sale",
+            "specialist_policy": "TBD",
+        })
+    return {
+        "catalog_revision": BILLING_CATALOG_REVISION,
+        "status": "draft_unapproved",
+        "simulation": True,
+        "charged": False,
+        "subscription_active": False,
+        "plans": plans,
+    }
 
 
 def _future_period(start, months):
@@ -142,6 +197,36 @@ class AccountStore:
                     ON consultation_requests(company_id, period_started, status);
                 CREATE INDEX IF NOT EXISTS consultation_requests_user
                     ON consultation_requests(company_id, user_id, created);
+                CREATE TABLE IF NOT EXISTS billing_checkout_intents (
+                    id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    catalog_revision TEXT NOT NULL,
+                    plan_code TEXT NOT NULL,
+                    billing_cycle TEXT NOT NULL,
+                    idempotency_key_hash TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('draft','confirmed_simulation','cancelled')),
+                    created REAL NOT NULL,
+                    expires REAL NOT NULL,
+                    confirmed REAL,
+                    cancelled REAL,
+                    FOREIGN KEY(company_id) REFERENCES account_companies(id),
+                    FOREIGN KEY(user_id) REFERENCES account_users(id),
+                    UNIQUE(company_id,user_id,idempotency_key_hash)
+                );
+                CREATE INDEX IF NOT EXISTS billing_checkout_owner
+                    ON billing_checkout_intents(company_id,user_id,created);
+                CREATE TABLE IF NOT EXISTS billing_checkout_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    intent_id TEXT NOT NULL,
+                    company_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    created REAL NOT NULL,
+                    FOREIGN KEY(intent_id) REFERENCES billing_checkout_intents(id)
+                );
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(consultation_requests)")}
             if "idempotency_key" not in columns:
@@ -485,3 +570,137 @@ class AccountStore:
 
     def cancel_consultation(self, request_id, company_id, user_id, *, now=None):
         return self._transition_consultation(request_id, company_id, user_id, "cancelled", now)
+
+    @staticmethod
+    def _billing_user(db, company_id, user_id):
+        return db.execute(
+            """SELECT 1 FROM account_users u JOIN account_companies c ON c.id=u.company_id
+               WHERE u.id=? AND u.company_id=? AND u.active=1 AND u.email_verified=1
+                 AND u.membership_verified=1 AND c.verified=1""",
+            (user_id, company_id),
+        ).fetchone()
+
+    @staticmethod
+    def _billing_snapshot(plan_code, billing_cycle):
+        if plan_code not in BILLING_PLAN_CODES or billing_cycle not in BILLING_CYCLES:
+            raise ValueError("billing_selection")
+        plan = next(item for item in billing_catalog()["plans"] if item["plan_code"] == plan_code)
+        return {
+            "catalog_revision": BILLING_CATALOG_REVISION,
+            "plan_code": plan_code,
+            "billing_cycle": billing_cycle,
+            "display_name": plan["display_name"],
+            "price": plan["price"],
+            "quota": plan["quota"],
+            "video_status": plan["video_status"],
+            "specialist_policy": plan["specialist_policy"],
+            "vat_status": "TBD",
+            "terms_version": None,
+            "privacy_version": None,
+        }
+
+    @staticmethod
+    def _billing_payload(row, *, replay=False):
+        payload = {
+            "checkout_id": row["id"],
+            "status": row["status"],
+            "selection": json.loads(row["snapshot_json"]),
+            "created_at": _utc(row["created"]),
+            "expires_at": _utc(row["expires"]),
+            "confirmed_at": _utc(row["confirmed"]) if row["confirmed"] is not None else None,
+            "cancelled_at": _utc(row["cancelled"]) if row["cancelled"] is not None else None,
+            "simulation": True,
+            "charged": False,
+            "subscription_active": False,
+        }
+        if replay:
+            payload["idempotent_replay"] = True
+        return payload
+
+    def create_checkout_simulation(self, company_id, user_id, plan_code, billing_cycle, *,
+                                   idempotency_key, now=None, ttl=1800):
+        """Create an immutable local quote.  No entitlement or payment state is touched."""
+        now = time.time() if now is None else float(now)
+        if isinstance(ttl, bool) or not 60 <= ttl <= 86400:
+            raise ValueError("billing_ttl")
+        idempotency_key = clean_text(idempotency_key, "idempotency_key", 128)
+        snapshot = self._billing_snapshot(plan_code, billing_cycle)
+        snapshot_json = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload_hash = hashlib.sha256(snapshot_json.encode()).hexdigest()
+        key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self._billing_user(db, company_id, user_id):
+                raise ValueError("user")
+            previous = db.execute(
+                """SELECT * FROM billing_checkout_intents
+                   WHERE company_id=? AND user_id=? AND idempotency_key_hash=?""",
+                (company_id, user_id, key_hash),
+            ).fetchone()
+            if previous:
+                if previous["payload_hash"] != payload_hash:
+                    raise BillingSandboxConflict("idempotency_mismatch")
+                db.execute(
+                    "INSERT INTO billing_checkout_audit(intent_id,company_id,user_id,event,created) VALUES (?,?,?,?,?)",
+                    (previous["id"], company_id, user_id, "idempotency_replay", now),
+                )
+                return self._billing_payload(previous, replay=True)
+            intent_id = secrets.token_hex(16)
+            db.execute(
+                """INSERT INTO billing_checkout_intents
+                   (id,company_id,user_id,catalog_revision,plan_code,billing_cycle,
+                    idempotency_key_hash,payload_hash,snapshot_json,status,created,expires)
+                   VALUES (?,?,?,?,?,?,?,?,?,'draft',?,?)""",
+                (intent_id, company_id, user_id, BILLING_CATALOG_REVISION, plan_code,
+                 billing_cycle, key_hash, payload_hash, snapshot_json, now, now + ttl),
+            )
+            db.execute(
+                "INSERT INTO billing_checkout_audit(intent_id,company_id,user_id,event,created) VALUES (?,?,?,?,?)",
+                (intent_id, company_id, user_id, "created", now),
+            )
+            row = db.execute("SELECT * FROM billing_checkout_intents WHERE id=?", (intent_id,)).fetchone()
+            return self._billing_payload(row)
+
+    def get_checkout_simulation(self, checkout_id, company_id, user_id):
+        if not isinstance(checkout_id, str) or len(checkout_id) > 64:
+            return None
+        with self.connect() as db:
+            if not self._billing_user(db, company_id, user_id):
+                raise ValueError("user")
+            row = db.execute(
+                "SELECT * FROM billing_checkout_intents WHERE id=? AND company_id=? AND user_id=?",
+                (checkout_id, company_id, user_id),
+            ).fetchone()
+        return self._billing_payload(row) if row else None
+
+    def transition_checkout_simulation(self, checkout_id, company_id, user_id, target, *, now=None):
+        if target not in {"confirmed_simulation", "cancelled"}:
+            raise ValueError("billing_status")
+        now = time.time() if now is None else float(now)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self._billing_user(db, company_id, user_id):
+                raise ValueError("user")
+            row = db.execute(
+                "SELECT * FROM billing_checkout_intents WHERE id=? AND company_id=? AND user_id=?",
+                (checkout_id, company_id, user_id),
+            ).fetchone()
+            if not row:
+                raise BillingSandboxConflict("checkout_not_found")
+            if row["status"] == target:
+                return self._billing_payload(row, replay=True)
+            if row["status"] != "draft":
+                raise BillingSandboxConflict("checkout_already_final")
+            if now >= row["expires"]:
+                raise BillingSandboxConflict("checkout_expired")
+            field = "confirmed" if target == "confirmed_simulation" else "cancelled"
+            db.execute(
+                f"UPDATE billing_checkout_intents SET status=?,{field}=? WHERE id=?",
+                (target, now, checkout_id),
+            )
+            db.execute(
+                "INSERT INTO billing_checkout_audit(intent_id,company_id,user_id,event,created) VALUES (?,?,?,?,?)",
+                (checkout_id, company_id, user_id, target, now),
+            )
+            updated = db.execute("SELECT * FROM billing_checkout_intents WHERE id=?", (checkout_id,)).fetchone()
+            return self._billing_payload(updated)
