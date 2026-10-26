@@ -108,15 +108,18 @@ test('an expired company session leaves the pilot login hidden and returns to ac
   assert.equal(f.$('login-panel').hidden, true);
 });
 
-test('video intake is explicit but does not call the unavailable pipeline', async () => {
-  const f = await fixture({ sessionData: { media: { image_max_bytes: 10485760, video_max_bytes: 52428800, video_analysis_enabled: false } } });
+test('video intake verifies frames and audio without claiming AI analysis', async () => {
+  const f = await fixture({ sessionData: { media: { image_max_bytes: 10485760, video_max_bytes: 52428800, video_intake_enabled: true, video_analysis_enabled: false } } });
   f.video();
   assert.equal(f.$('media-note').hidden, false);
-  assert.match(f.$('media-note').textContent, /preparazione/);
-  assert.equal(f.$('analyse-button').disabled, true);
+  assert.match(f.$('media-note').textContent, /non esegue ancora l’analisi AI/);
+  assert.equal(f.$('analyse-button').disabled, false);
   await f.submit();
-  assert.equal(f.requests.length, 0);
-  assert.match(f.$('analysis-feedback').textContent, /non è stato inviato/);
+  assert.equal(f.requests.length, 1);
+  await f.finishRequest('/api/media/inspect', { message: 'Video e audio verificati localmente.', media: { duration_seconds: 1.2, frames: [{ timestamp_seconds: 0.4, image_data_url: 'data:image/jpeg;base64,AA==' }], audio: { status: 'ready_for_transcription' } }, trial_consumed: false });
+  assert.equal(f.$('video-evidence').hidden, false);
+  assert.match(f.$('audio-summary').textContent, /non sono ancora state verificate/);
+  assert.match(f.$('media-note').textContent, /non è stata consumata/);
 });
 
 test('trial result remains readable while print and export are unavailable', async () => {

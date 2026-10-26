@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, mediaKind: null, imageUrl: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_analysis_enabled: false } };
+  const state = { csrf: '', authenticated: false, configured: false, busy: false, historyBusy: false, caseBusy: false, historyLoaded: false, openedCaseId: null, file: null, mediaKind: null, imageUrl: null, mediaUrl: null, videoInspection: null, analysis: null, archive: null, controller: null, answers: new Map(), submittedContext: '', view: 'analysis', editing: true, entitlement: { plan: 'internal', export_allowed: true }, media: { image_max_bytes: 10 * 1024 * 1024, video_max_bytes: 50 * 1024 * 1024, video_max_seconds: 30, video_intake_enabled: false, video_analysis_enabled: false } };
   const certaintyLabels = { visible: 'Visibile nella foto', reported: 'Riferito dall’utilizzatore', verify: 'Da verificare sul posto' };
   const riskLabels = { high: 'Rischio alto', medium: 'Rischio medio', low: 'Rischio basso', undetermined: 'Rischio da determinare' };
   const make = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
@@ -38,8 +38,10 @@
   function newAnalysis() {
     if (state.busy || state.caseBusy) return;
     if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
-    state.file = null; state.mediaKind = null; state.imageUrl = null; $('photo').value = ''; $('context').value = '';
+    if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl);
+    state.file = null; state.mediaKind = null; state.imageUrl = null; state.mediaUrl = null; state.videoInspection = null; $('photo').value = ''; $('context').value = '';
     $('preview-wrap').hidden = true; $('preview').removeAttribute('src'); $('file-name').textContent = '';
+    $('video-preview').removeAttribute('src'); $('video-evidence').hidden = true; $('video-frames').replaceChildren();
     $('media-note').hidden = true; $('media-note').textContent = '';
     clearAnalysis(); notice(''); showView('analysis', true);
   }
@@ -95,7 +97,9 @@
   function updateButton() {
     const trialExhausted = state.entitlement.plan === 'trial' && state.entitlement.analyses_remaining === 0;
     const canExport = state.entitlement.export_allowed !== false;
-    $('analyse-button').disabled = state.busy || !state.configured || state.mediaKind === 'video' || (trialExhausted && !state.openedCaseId); $('reanalyse-button').disabled = state.busy || !state.configured;
+    const videoReady = state.mediaKind === 'video' && state.media.video_intake_enabled;
+    $('analyse-button').disabled = state.busy || (videoReady ? false : !state.configured || state.mediaKind === 'video' || (trialExhausted && !state.openedCaseId)); $('reanalyse-button').disabled = state.busy || !state.configured;
+    if (!state.busy) $('analyse-button').textContent = state.mediaKind === 'video' ? 'Verifica video e audio →' : 'Avvia analisi AI →';
     $('export-json').disabled = state.busy || !state.analysis || !canExport; $('print-report').disabled = state.busy || !state.analysis || !canExport;
     $('export-json').hidden = !canExport; $('print-report').hidden = !canExport; $('trial-export-note').hidden = canExport || !state.analysis;
     $('trial-entitlement-note').hidden = !trialExhausted || Boolean(state.openedCaseId);
@@ -106,7 +110,11 @@
   }
   function setBusy(value) {
     state.busy = value; updateButton(); $('photo').disabled = value; $('context').disabled = value; $('logout').disabled = value;
-    $('analyse-button').textContent = value ? 'Analisi in corso…' : 'Avvia analisi AI →';
+    const video = state.mediaKind === 'video';
+    $('busy-eyebrow').textContent = video ? 'Video e audio acquisiti' : 'Foto e contesto inviati';
+    $('busy-title').textContent = video ? 'Verifica tecnica in corso' : 'Analisi in corso';
+    $('busy-description').textContent = video ? 'Sto controllando durata, fotogrammi e presenza della traccia audio.' : 'Sto esaminando la situazione per proporre osservazioni, azioni e chiarimenti.';
+    $('analyse-button').textContent = value ? (state.mediaKind === 'video' ? 'Verifica in corso…' : 'Analisi in corso…') : (state.mediaKind === 'video' ? 'Verifica video e audio →' : 'Avvia analisi AI →');
     $('reanalyse-button').textContent = value ? 'Analisi in corso…' : state.analysis && !state.file ? 'Aggiungi la foto per aggiornare' : 'Aggiorna con le risposte';
     $('busy-state').hidden = !value; $('report').hidden = value || !state.analysis; $('empty-state').hidden = value || Boolean(state.analysis);
     $('result-region').setAttribute('aria-busy', String(value));
@@ -247,7 +255,7 @@
     try {
       await api('/api/logout', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf } });
       clearAnalysis(); $('analysis-form').reset(); $('preview-wrap').hidden = true; $('preview').removeAttribute('src');
-      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; state.mediaKind = null; state.view = 'analysis';
+      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl); state.imageUrl = null; state.mediaUrl = null; state.file = null; state.mediaKind = null; state.view = 'analysis';
       applySession({ authenticated: false, configured: false }); applySession(await api('/api/session')); notice('Sessione chiusa.');
     } catch (err) { notice(err.message, 'error'); }
   });
@@ -255,7 +263,7 @@
     const attachingArchivedPhoto = Boolean(state.analysis && !state.file);
     if (attachingArchivedPhoto) { clearFeedback(); state.editing = true; } else clearAnalysis();
     notice('');
-    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; state.file = null; state.mediaKind = null; $('preview-wrap').hidden = true; $('preview').hidden = false; $('media-note').hidden = true;
+    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl); if (state.mediaUrl) URL.revokeObjectURL(state.mediaUrl); state.imageUrl = null; state.mediaUrl = null; state.file = null; state.mediaKind = null; state.videoInspection = null; $('preview-wrap').hidden = true; $('preview').hidden = false; $('video-preview').hidden = true; $('video-preview').removeAttribute('src'); $('video-evidence').hidden = true; $('video-frames').replaceChildren(); $('media-note').hidden = true;
     syncWorkspace();
     const file = $('photo').files[0]; if (!file) return;
     const images = ['image/jpeg', 'image/png', 'image/webp'], videos = ['video/mp4', 'video/webm', 'video/quicktime'];
@@ -266,9 +274,13 @@
     $('media-ready').textContent = isVideo ? 'Video selezionato' : 'Foto selezionata';
     if (isVideo) {
       $('preview').hidden = true; $('preview').removeAttribute('src');
-      $('media-note').textContent = 'Formato ed estensione del video riconosciuti (limite previsto: ' + state.media.video_max_seconds + ' secondi). Contenuto e durata non sono ancora validati: l’analisi video è in preparazione, il file non verrà inviato al motore AI e non consumerà la prova gratuita.'; $('media-note').hidden = false;
+      state.mediaUrl = URL.createObjectURL(file); $('video-preview').src = state.mediaUrl; $('video-preview').hidden = false;
+      $('media-note').textContent = state.media.video_intake_enabled
+        ? 'Verifica durata, fotogrammi e traccia audio (massimo ' + state.media.video_max_seconds + ' secondi). Questa verifica locale non esegue ancora l’analisi AI e non consuma la prova gratuita.'
+        : 'La verifica tecnica dei video non è disponibile in questo ambiente. Il file non verrà inviato e la prova gratuita non verrà consumata.';
+      $('media-note').hidden = false;
     } else {
-      state.imageUrl = URL.createObjectURL(file); $('preview').src = state.imageUrl; $('preview').hidden = false; $('media-note').hidden = true;
+      $('video-preview').hidden = true; state.imageUrl = URL.createObjectURL(file); $('preview').src = state.imageUrl; $('preview').hidden = false; $('media-note').hidden = true;
     }
     if (attachingArchivedPhoto) {
       $('report-notice').textContent = 'Fotografia selezionata per il prossimo aggiornamento. Il rapporto salvato non è ancora cambiato: verifica che sia la fotografia originale.';
@@ -285,7 +297,7 @@
     if (state.busy) return;
     clearFeedback();
     if (!state.file) { focusFeedback(analysisError('Seleziona una foto o un video prima di avviare l’analisi.', origin)); return; }
-    if (state.mediaKind === 'video') { focusFeedback(analysisError('L’analisi video è in preparazione. Il video non è stato inviato e la prova gratuita non è stata consumata.', origin)); return; }
+    if (state.mediaKind === 'video') { await inspectVideo(origin); return; }
     const context = composedContext(); if (context.length > 8000) { focusFeedback(analysisError('Il contesto e le risposte superano 8.000 caratteri. Riduci i dettagli secondari prima di continuare.', origin)); return; }
     if (!state.configured) { focusFeedback(analysisError('Completa la configurazione del servizio prima di avviare un’analisi.', origin)); return; }
     notice(''); if (origin === 'analysis') state.editing = true; showView('analysis'); setBusy(true); focusFeedback('busy-title'); state.controller = new AbortController();
@@ -326,6 +338,37 @@
       const active = document.activeElement;
       if (!active || active === document.body || active === $('busy-title') || active.disabled) focusFeedback(outcomeTarget);
     }
+  }
+  function renderVideoInspection(media) {
+    $('video-summary').textContent = 'Durata verificata: ' + media.duration_seconds.toFixed(1) + ' s · ' + media.frames.length + ' fotogrammi campionati.';
+    $('video-frames').replaceChildren();
+    media.frames.forEach(frame => {
+      const figure = make('figure', null, 'video-frame'); const image = make('img'); image.src = frame.image_data_url; image.alt = 'Fotogramma a ' + frame.timestamp_seconds.toFixed(1) + ' secondi';
+      figure.append(image, make('figcaption', frame.timestamp_seconds.toFixed(1) + ' s')); $('video-frames').append(figure);
+    });
+    const labels = { absent: 'Nessuna traccia audio presente.', silent: 'Traccia audio digitale priva di segnale.', low_level: 'Traccia audio con segnale molto debole: deve ancora essere trascritta e verificata.', ready_for_transcription: 'Traccia audio estratta: la trascrizione e la comprensibilità non sono ancora state verificate.', error: 'Traccia audio presente, ma estrazione non riuscita: la verifica resta incompleta.' };
+    $('audio-summary').textContent = labels[media.audio.status] || 'Stato audio non determinato.';
+    $('video-evidence').hidden = false;
+  }
+  async function inspectVideo(origin) {
+    if (!state.media.video_intake_enabled) { focusFeedback(analysisError('La verifica locale dei video non è disponibile.', origin)); return; }
+    setBusy(true); state.controller = new AbortController(); $('analysis-announcement').textContent = 'Verifica tecnica di video e audio in corso.';
+    const form = new FormData(); form.append('file', state.file);
+    try {
+      const data = await api('/api/media/inspect', { method: 'POST', headers: { 'X-CSRF-Token': state.csrf }, body: form, signal: state.controller.signal });
+      state.videoInspection = data.media; renderVideoInspection(data.media);
+      const incomplete = data.media.audio.status === 'error' ? ' Attenzione: la parte audio non è stata verificata.' : '';
+      $('media-note').textContent = data.message + incomplete + ' La prova gratuita non è stata consumata.';
+      $('analysis-announcement').textContent = 'Verifica tecnica del video completata.';
+    } catch (err) {
+      if (err.status === 401) {
+        analysisError('Sessione scaduta. Il video non è stato verificato.', origin);
+        applySession({ authenticated: false, configured: false });
+        try { applySession(await api('/api/session')); notice('Sessione scaduta. Accedi nuovamente per verificare il video.', 'warning'); }
+        catch { notice('Sessione scaduta. Ricarica la pagina prima di riprovare.', 'error'); }
+      } else focusFeedback(analysisError('Verifica video non completata. ' + err.message, origin));
+    }
+    finally { state.controller = null; setBusy(false); if (!state.videoInspection) focusFeedback('analysis-feedback'); else focusFeedback('video-evidence-title'); }
   }
   $('analysis-form').addEventListener('submit', e => { e.preventDefault(); analyse(); });
   $('questions-form').addEventListener('submit', e => {

@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 import sqlite3
+import subprocess
 
 from PIL import Image
 import pytest
@@ -54,6 +55,22 @@ def post_media(client, token, raw, filename, mime, **fields):
         "file": (io.BytesIO(raw), filename, mime),
         **fields,
     }, headers={"X-CSRF-Token": token})
+
+
+def inspect_media(client, token, raw, filename="clip.mp4", mime="video/mp4"):
+    return client.post("/api/media/inspect", data={
+        "file": (io.BytesIO(raw), filename, mime),
+    }, headers={"X-CSRF-Token": token})
+
+
+def short_video(tmp_path):
+    target = tmp_path / "video.mp4"
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.8",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.8", "-shortest", "-c:v", "libx264",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", str(target),
+    ], check=True)
+    return target.read_bytes()
 
 
 def trial_app(tmp_path, monkeypatch, hourly=10):
@@ -433,6 +450,43 @@ def test_video_is_recognized_but_never_sent_or_charged(tmp_path, monkeypatch):
     assert response.status_code == 501
     assert response.json["error"]["code"] == "video_pipeline_unavailable"
     assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1
+
+
+def test_video_intake_validates_frames_and_audio_without_provider_or_trial(tmp_path, monkeypatch):
+    app = trial_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    token = login(client, "trial-password-16-chars").json["csrf"]
+    monkeypatch.setattr(server, "analizza_immagine", lambda *_args: pytest.fail("Provider called"))
+    response = inspect_media(client, token, short_video(tmp_path))
+    assert response.status_code == 200
+    assert response.json["media"]["validated"] is True
+    assert response.json["media"]["audio"]["status"] == "ready_for_transcription"
+    assert response.json["media"]["transcription"]["status"] == "not_performed"
+    assert response.json["trial_consumed"] is False
+    assert client.get("/api/session").json["entitlement"]["analyses_remaining"] == 1
+
+
+def test_video_intake_refuses_parallel_decoder_job(client):
+    token = login(client).json["csrf"]
+    store = client.application.extensions["limit_store"]
+    lease, failure = store.reserve_media("another-account")
+    assert lease and failure is None
+    try:
+        response = inspect_media(client, token, b"not-decoded")
+    finally:
+        store.release_media(lease)
+    assert response.status_code == 429
+    assert response.json["error"]["code"] == "media_busy"
+
+
+def test_video_intake_does_not_start_decoder_after_slow_parse(client, monkeypatch):
+    token = login(client).json["csrf"]
+    moments = iter((100.0, 121.0))
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(server, "inspect_video", lambda *_args, **_kwargs: pytest.fail("Decoder started"))
+    response = inspect_media(client, token, b"already-too-late")
+    assert response.status_code == 422
+    assert response.json["error"]["code"] == "media_processing_timeout"
 
 
 def test_trial_allows_one_success_and_blocks_second_before_provider(tmp_path, monkeypatch):

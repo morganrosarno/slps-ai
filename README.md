@@ -23,18 +23,22 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
   SHA-256, non la fotografia.
 - Upload foto solo in memoria, controllo coerente di MIME, estensione e contenuto, limite
   configurabile (10 MB per default), 25 megapixel e rimozione dei metadati.
-- Contratto di caricamento video separato (MP4, WebM, MOV; 50 MB e 30 secondi previsti
-  per default): la UI lo
-  identifica come «in preparazione» e il backend lo rifiuta senza inviarlo al motore AI
-  né consumare la prova. Durata, estrazione fotogrammi e analisi video non sono ancora
-  validate o implementate.
+- Verifica tecnica locale dei video MP4, WebM e MOV (50 MB e 30 secondi per default):
+  `ffprobe` valida contenuto e durata, mentre `ffmpeg` estrae un numero adattivo di
+  fotogrammi uniformi con timestamp e la prima traccia audio. L'audio viene distinto tra
+  assente, privo di segnale, a basso livello, pronto per una futura trascrizione o in
+  errore. Non vengono ancora interpretate tracce audio multiple e il campionamento non
+  equivale al rilevamento di ogni scena o evento. La verifica non chiama un
+  fornitore AI e non consuma la prova gratuita; trascrizione, comprensione audio, analisi
+  dei rischi e conservazione del file originale sono indicate chiaramente come non ancora
+  implementate.
 - Archivio SQLite dei risultati, senza fotografia, sempre filtrato per azienda e proprietario.
 - Nessun risultato inventato in caso di errore o quota esaurita; nessuna ripetizione automatica.
 - Sito di presentazione su `/` e interfaccia autenticata su `/app/`, nello stesso servizio.
 - Navigazione tra nuova analisi e archivio, passaggi foto/contesto/risultato e rapporto operativo.
 
 ## Avvio locale
-Python 3.12 verificato durante lo sviluppo.
+Python 3.12, `ffmpeg` e `ffprobe` sono richiesti e verificati durante lo sviluppo.
 
 1. Crea un ambiente virtuale e installa requirements.txt.
 2. Configura le variabili descritte in .env.example nell'ambiente del processo.

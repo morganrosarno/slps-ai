@@ -20,6 +20,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from slps_ai import AnalysisError, analizza_immagine, is_analysis_configured
 from accounts import AccountConflict, AccountStore, normalize_email
+from media import MediaError, inspect_video, media_tools_available
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -110,6 +111,26 @@ class LimitStore:
     def release_analysis(self, token):
         with self.connect() as db:
             db.execute("DELETE FROM leases WHERE name='analysis' AND token=?", (token,))
+
+    def reserve_media(self, scope, limit=6, window=900, lease_seconds=90):
+        now = time.time()
+        token = secrets.token_urlsafe(24)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM events WHERE created < ?", (now - 86400,))
+            db.execute("DELETE FROM leases WHERE expires < ?", (now,))
+            if db.execute("SELECT 1 FROM leases WHERE name='media-processing'").fetchone():
+                return None, "busy"
+            count = db.execute("SELECT COUNT(*) FROM events WHERE kind='media' AND scope=? AND created>?", (scope, now - window)).fetchone()[0]
+            if count >= limit:
+                return None, "limit"
+            db.execute("INSERT INTO events VALUES ('media', ?, ?)", (scope, now))
+            db.execute("INSERT INTO leases VALUES ('media-processing', ?, ?)", (token, now + lease_seconds))
+        return token, None
+
+    def release_media(self, token):
+        with self.connect() as db:
+            db.execute("DELETE FROM leases WHERE name='media-processing' AND token=?", (token,))
 
     @staticmethod
     def _trial_lease_name(scope):
@@ -477,10 +498,13 @@ def create_app(test_config=None):
         }
 
     def media_capabilities():
+        local_video_tools = media_tools_available()
         return {
             "image_max_bytes": app.config["MAX_IMAGE_BYTES"],
             "video_max_bytes": app.config["MAX_VIDEO_BYTES"],
             "video_max_seconds": app.config["MAX_VIDEO_SECONDS"],
+            "video_intake_enabled": local_video_tools,
+            "audio_extraction_enabled": local_video_tools,
             "video_analysis_enabled": False,
         }
 
@@ -564,7 +588,7 @@ def create_app(test_config=None):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         if app.config["SESSION_COOKIE_SECURE"]:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -741,6 +765,48 @@ def create_app(test_config=None):
         ):
             return error("case_not_found", "Caso non disponibile.", 404)
         return jsonify(deleted=True)
+
+    @app.post("/api/media/inspect")
+    @protect
+    def inspect_uploaded_media():
+        media_started = time.monotonic()
+        media_token, media_failure = store.reserve_media(principal_scope())
+        if media_failure == "busy":
+            return error("media_busy", "È già in corso una verifica video. Riprova tra poco.", 429)
+        if media_failure == "limit":
+            return error("media_rate_limited", "Troppe verifiche video in pochi minuti. Riprova più tardi.", 429)
+        try:
+            files = request.files.getlist("file")
+            if len(files) != 1 or not files[0].filename:
+                return error("invalid_file", "Seleziona un solo video.", 400)
+            upload = files[0]
+            extension = Path(upload.filename).suffix.lower()
+            declared_mime = (upload.mimetype or "").lower()
+            if VIDEO_MEDIA.get(extension) != declared_mime:
+                return error("invalid_media", "Tipo MIME ed estensione non corrispondono. Usa MP4, WebM o MOV.", 400)
+            if request.content_length and request.content_length > app.config["MAX_VIDEO_BYTES"] + 128 * 1024:
+                return error("file_too_large", "Il video supera il limite configurato.", 413)
+            raw = upload.stream.read(app.config["MAX_VIDEO_BYTES"] + 1)
+            if time.monotonic() - media_started > 20:
+                return error("media_processing_timeout", "Il caricamento ha superato il tempo consentito. Riprova con un file più piccolo o una connessione stabile.", 422)
+            try:
+                media = inspect_video(
+                    raw,
+                    expected_mime=declared_mime,
+                    max_bytes=app.config["MAX_VIDEO_BYTES"],
+                    max_seconds=app.config["MAX_VIDEO_SECONDS"],
+                )
+            except MediaError as exc:
+                return error(exc.code, str(exc), exc.status)
+        finally:
+            store.release_media(media_token)
+        message = "Video verificato; la parte audio non ha potuto essere verificata." if media["audio"]["status"] == "error" else "Video e audio verificati localmente."
+        return jsonify(
+            media=media,
+            analysis_available=False,
+            trial_consumed=False,
+            message=message + " L’analisi AI e la trascrizione non sono ancora state eseguite.",
+        )
 
     @app.post("/analizza")
     @protect
