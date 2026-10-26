@@ -66,6 +66,13 @@
     en:{consultationAvailableState:'A request is available in this period.',consultationExhaustedState:'Availability is exhausted for this period.',consultationIdempotency:'The repeated request does not match the one already recorded. Reload availability.',consultationChannelPhone:'Channel: phone',consultationChannelWhatsapp:'Channel: WhatsApp',consultationStatusReserved:'status: reserved',consultationStatusUsed:'status: used',consultationStatusCancelled:'status: cancelled',consultationAuthorizedCase:'Authorised case'}
   };
   Object.keys(dictionaries).forEach(language => Object.assign(dictionaries[language], consultationDetailTranslations[language]));
+  const checkoutTranslations = {
+    it:{openCheckout:'Prova i piani senza addebito'},
+    de:{openCheckout:'Tarife ohne Belastung testen'},
+    fr:{openCheckout:'Tester les offres sans débit'},
+    en:{openCheckout:'Try plans with no charge'}
+  };
+  Object.keys(dictionaries).forEach(language => Object.assign(dictionaries[language], checkoutTranslations[language]));
   const locales = Object.keys(dictionaries);
   const storageKey = 'slps.locale';
   const legacyStorageKey = 'slps.account.locale';
@@ -91,7 +98,7 @@
     let saved = null;
     try { saved = window.localStorage.getItem(storageKey) || window.localStorage.getItem(legacyStorageKey); } catch (_) { /* Storage is optional. */ }
     const browser = String(window.navigator && window.navigator.language || '').slice(0, 2);
-    const state = { language: locales.includes(saved) ? saved : locales.includes(browser) ? browser : 'it', explicitLanguage: locales.includes(saved), view: window.location.pathname.replace(/\/$/, '') === '/register' ? 'register' : 'login', csrf: '', authenticated: false, authConfigured: false, account: null, authMode: null, registrationOpen: false, busy: false, loading: true, notice: null, consultation: null, consultationCases: [], consultationKey: null };
+    const state = { language: locales.includes(saved) ? saved : locales.includes(browser) ? browser : 'it', explicitLanguage: locales.includes(saved), view: window.location.pathname.replace(/\/$/, '') === '/register' ? 'register' : 'login', csrf: '', authenticated: false, authConfigured: false, account: null, authMode: null, registrationOpen: false, billingSandboxAvailable: false, busy: false, loading: true, notice: null, consultation: null, consultationCases: [], consultationKey: null };
     const t = key => dictionaries[state.language][key] || dictionaries.it[key] || key;
     function setNotice(key, kind = '', focus = false) {
       state.notice = key ? { key, kind } : null;
@@ -160,10 +167,12 @@
         $('delivery-note').hidden = account.email_verified === true;
         $('account-workspace').hidden = !ready;
         $('consultation-panel').hidden = !ready;
+        $('billing-checkout-link').hidden = !(ready && state.billingSandboxAvailable);
       } else {
         $('account-company-name').textContent = ''; $('account-email').textContent = '';
         $('account-workspace').hidden = true;
         $('consultation-panel').hidden = true;
+        $('billing-checkout-link').hidden = true;
       }
     }
     function applySession(data) {
@@ -171,6 +180,7 @@
       state.authConfigured = data.auth_configured !== false && Boolean(state.csrf);
       state.authMode = data.auth_mode || 'pilot';
       state.registrationOpen = data.registration_open === true;
+      state.billingSandboxAvailable = data.billing_sandbox_available === true;
       state.authenticated = data.authenticated === true;
       state.account = state.authenticated && data.account && typeof data.account === 'object' ? data.account : null;
       if (state.account && !state.explicitLanguage && locales.includes(state.account.locale)) state.language = state.account.locale;

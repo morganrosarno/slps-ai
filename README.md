@@ -43,6 +43,12 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
   `/api/sandbox/billing`: catalogo non approvato, snapshot immutabile,
   idempotenza e isolamento azienda/proprietario. Non accetta carte, non chiama
   provider, non addebita e non modifica piano o quote di analisi.
+- Vista riservata `/account/checkout`, disponibile soltanto a un account e a
+  un'azienda verificati quando il sandbox è abilitato. Il confronto in quattro
+  lingue indica esplicitamente ciò che resta da definire; conferma e annulla
+  soltanto la simulazione. Le richieste aperte sono limitate atomicamente con
+  `SLPS_BILLING_SANDBOX_MAX_OPEN_INTENTS` (default 5) e le scadenze diventano
+  uno stato registrato e verificabile.
 
 ## Avvio locale
 Python 3.12, `ffmpeg` e `ffprobe` sono richiesti e verificati durante lo sviluppo.

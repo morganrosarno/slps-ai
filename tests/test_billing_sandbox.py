@@ -210,3 +210,141 @@ def test_store_reopen_preserves_immutable_snapshot_and_no_payment_columns(app):
     with reopened.connect() as db:
         columns = {row["name"] for row in db.execute("PRAGMA table_info(billing_checkout_intents)")}
     assert not columns.intersection({"card_number", "pan", "cvc", "payment_token", "provider"})
+
+
+def test_expiry_is_materialized_once_and_releases_open_intent_capacity(app):
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    user = register(store)
+    first = store.create_checkout_simulation(
+        user["company_id"], user["id"], "tier_essential_v1", "monthly",
+        idempotency_key="expiry-materialized-001", now=1000, ttl=60, max_open_intents=1,
+    )
+    with pytest.raises(BillingSandboxConflict, match="open_intent_limit"):
+        store.create_checkout_simulation(
+            user["company_id"], user["id"], "tier_team_v1", "monthly",
+            idempotency_key="expiry-materialized-002", now=1050, ttl=60, max_open_intents=1,
+        )
+    expired = store.get_checkout_simulation(
+        first["checkout_id"], user["company_id"], user["id"], now=1060,
+    )
+    assert expired["status"] == "expired"
+    assert expired["expired_at"] == "1970-01-01T00:17:40Z"
+    assert expired["charged"] is False and expired["subscription_active"] is False
+    # A second read must not add another transition event.
+    assert store.get_checkout_simulation(
+        first["checkout_id"], user["company_id"], user["id"], now=1200,
+    )["status"] == "expired"
+    second = store.create_checkout_simulation(
+        user["company_id"], user["id"], "tier_team_v1", "annual",
+        idempotency_key="expiry-materialized-002", now=1200, ttl=60, max_open_intents=1,
+    )
+    assert second["status"] == "draft"
+    with sqlite3.connect(app.config["ACCOUNT_DB_PATH"]) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM billing_checkout_audit WHERE intent_id=? AND event='expired'",
+            (first["checkout_id"],),
+        ).fetchone()[0] == 1
+
+
+def test_open_intent_cap_is_atomic_per_company_and_user(app):
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    user = register(store)
+
+    def attempt(index):
+        try:
+            return store.create_checkout_simulation(
+                user["company_id"], user["id"], "tier_team_v1", "monthly",
+                idempotency_key=f"parallel-cap-key-{index:03d}", now=2000, ttl=600,
+                max_open_intents=1,
+            )["checkout_id"]
+        except BillingSandboxConflict as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, range(2)))
+    assert outcomes.count("open_intent_limit") == 1
+    assert sum(value != "open_intent_limit" for value in outcomes) == 1
+    with sqlite3.connect(app.config["ACCOUNT_DB_PATH"]) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM billing_checkout_intents WHERE company_id=? AND user_id=?",
+            (user["company_id"], user["id"]),
+        ).fetchone()[0] == 1
+
+
+def test_open_intent_cap_is_scoped_to_each_verified_company_member(app):
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    owner = register(store)
+    member = store.add_member(
+        owner["company_id"], email="cap-member@example.test", password=PASSWORD,
+        role="Employee", approved=True,
+    )
+    store.consume_token(store.issue_token(member["id"], "email"), "email")
+    first = store.create_checkout_simulation(
+        owner["company_id"], owner["id"], "tier_essential_v1", "monthly",
+        idempotency_key="owner-open-limit-001", max_open_intents=1,
+    )
+    second = store.create_checkout_simulation(
+        owner["company_id"], member["id"], "tier_essential_v1", "monthly",
+        idempotency_key="member-open-limit-001", max_open_intents=1,
+    )
+    assert first["checkout_id"] != second["checkout_id"]
+
+
+def test_cap_does_not_block_same_idempotent_replay(app):
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    user = register(store)
+    kwargs = dict(
+        company_id=user["company_id"], user_id=user["id"],
+        plan_code="tier_partner_v1", billing_cycle="annual",
+        idempotency_key="same-replay-at-cap-001", now=3000, ttl=600,
+        max_open_intents=1,
+    )
+    first = store.create_checkout_simulation(**kwargs)
+    second = store.create_checkout_simulation(**kwargs)
+    assert second["checkout_id"] == first["checkout_id"]
+    assert second["idempotent_replay"] is True
+
+
+def test_api_returns_stable_cap_and_expired_codes(app, monkeypatch):
+    app.config["BILLING_SANDBOX_MAX_OPEN_INTENTS"] = 1
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    register(store)
+    client = app.test_client()
+    session = login(client)
+    first = create(client, session["csrf"], key="api-cap-first-key-001")
+    assert first.status_code == 201
+    capped = create(client, session["csrf"], plan="tier_partner_v1", key="api-cap-second-key-002")
+    assert capped.status_code == 409
+    assert capped.json["error"]["code"] == "open_intent_limit"
+    checkout_id = first.json["checkout"]["checkout_id"]
+    with sqlite3.connect(app.config["ACCOUNT_DB_PATH"]) as db:
+        db.execute("UPDATE billing_checkout_intents SET expires=0 WHERE id=?", (checkout_id,))
+    expired = client.post(
+        f"/api/sandbox/billing/checkout-simulations/{checkout_id}/confirm",
+        json={}, headers={"X-CSRF-Token": session["csrf"]},
+    )
+    assert expired.status_code == 409
+    assert expired.json["error"]["code"] == "checkout_expired"
+    current = client.get(f"/api/sandbox/billing/checkout-simulations/{checkout_id}")
+    assert current.status_code == 200
+    assert current.json["checkout"]["status"] == "expired"
+    assert current.json["checkout"]["charged"] is False
+
+
+def test_private_checkout_page_requires_flag_login_and_verified_company(app):
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    pending = register(store, verified=False)
+    client = app.test_client()
+    assert client.get("/account/checkout").status_code == 302
+    login(client)
+    assert client.get("/account/checkout").status_code == 302
+    store.consume_token(store.issue_token(pending["id"], "email"), "email")
+    store.verify_company(pending["company_id"], pending["id"])
+    page = client.get("/account/checkout")
+    assert page.status_code == 200
+    source = page.get_data(as_text=True)
+    assert "Simulazione · nessun addebito" in source
+    assert "tier_essential_v1" not in source
+    assert "draft_unapproved" not in source
+    app.config["BILLING_SANDBOX_ENABLED"] = False
+    assert client.get("/account/checkout").status_code == 302

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#13283f">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SLPS AI · Simulazione piani</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='checkout.css') }}">
+  <script src="{{ url_for('static', filename='checkout.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main" data-i18n="skip">Vai al contenuto</a>
+  <header class="checkout-header">
+    <a class="brand" href="/account" aria-label="SLPS AI"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 36" fill="none"><path d="m16 2 13 5v11c0 8-9 14-13 16C12 32 3 26 3 18V7Z" stroke="currentColor" stroke-width="2"/><path d="m10 18 4 4 9-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>SLPS <strong>AI</strong></span></a>
+    <div class="header-actions"><a class="back-link" href="/account" data-i18n="backAccount">← Account</a><label class="sr-only" for="checkout-language" data-i18n="language">Lingua</label><select id="checkout-language" aria-label="Lingua"><option value="it" lang="it">Italiano</option><option value="de" lang="de">Deutsch</option><option value="fr" lang="fr">Français</option><option value="en" lang="en">English</option></select></div>
+  </header>
+
+  <main id="main" class="checkout-main">
+    <section class="checkout-hero" aria-labelledby="checkout-title">
+      <div><p class="eyebrow" data-i18n="eyebrow">Area aziendale riservata</p><h1 id="checkout-title" data-i18n="title">Confronta i piani in prova.</h1><p class="hero-copy" data-i18n="intro">Puoi simulare la scelta prima di definire l'offerta commerciale.</p></div>
+      <p class="simulation-badge"><span aria-hidden="true">◇</span><span data-i18n="badge">Simulazione · nessun addebito</span></p>
+    </section>
+
+    <div id="checkout-notice" class="notice" role="alert" aria-live="assertive" tabindex="-1" hidden></div>
+    <div id="checkout-loading" class="loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span data-i18n="loading">Caricamento della simulazione…</span></div>
+    <section id="checkout-unavailable" class="empty-panel" hidden><h2 data-i18n="unavailableTitle">Simulazione non disponibile</h2><p data-i18n="unavailableCopy">Torna al tuo account e verifica lo stato dell'accesso.</p><a class="button secondary" href="/account" data-i18n="backAccount">← Account</a></section>
+
+    <section id="checkout-chooser" class="chooser" aria-labelledby="plans-title" hidden>
+      <div class="section-heading"><div><p class="step" data-i18n="stepOne">Passaggio 1 di 2</p><h2 id="plans-title" tabindex="-1" data-i18n="plansTitle">Scegli una proposta da simulare</h2></div><p class="draft-note" data-i18n="draftNote">Nomi commerciali, prezzi, IVA, quote e vantaggi sono ancora da definire.</p></div>
+      <fieldset class="cycle-toggle"><legend data-i18n="cycleLegend">Periodicità da confrontare</legend><label><input type="radio" name="billing-cycle" value="monthly" checked><span data-i18n="monthly">Mensile</span></label><label><input type="radio" name="billing-cycle" value="annual"><span data-i18n="annual">Annuale</span></label></fieldset>
+      <div id="checkout-plans" class="plan-grid" role="radiogroup" aria-labelledby="plans-title"></div>
+      <p id="checkout-selection" class="selection-line" role="status" aria-live="polite" data-i18n="selectPrompt">Seleziona una proposta per continuare.</p>
+      <button id="checkout-create" class="button primary cta" type="button" disabled data-i18n="create">Rivedi la simulazione</button>
+    </section>
+
+    <section id="checkout-summary" class="summary" aria-labelledby="summary-title" hidden>
+      <p class="step" data-i18n="stepTwo">Passaggio 2 di 2</p><h2 id="summary-title" tabindex="-1" data-i18n="summaryTitle">Riepilogo della simulazione</h2>
+      <dl class="summary-grid"><div><dt data-i18n="proposal">Proposta</dt><dd id="summary-plan"></dd></div><div><dt data-i18n="periodicity">Periodicità</dt><dd id="summary-cycle"></dd></div><div><dt data-i18n="price">Prezzo</dt><dd data-i18n="toDefine">Da definire</dd></div><div><dt data-i18n="quota">Quote incluse</dt><dd data-i18n="toDefine">Da definire</dd></div><div><dt data-i18n="vat">IVA</dt><dd data-i18n="toDefine">Da definire</dd></div></dl>
+      <div id="checkout-state" class="state-panel" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></div>
+      <div class="summary-actions"><button id="checkout-confirm" class="button primary" type="button" data-i18n="confirm">Conferma soltanto la simulazione</button><button id="checkout-cancel" class="button secondary" type="button" data-i18n="cancel">Annulla simulazione</button><button id="checkout-refresh" class="text-button" type="button" data-i18n="refresh">Aggiorna stato</button></div>
+      <p class="safety-note" data-i18n="safety">Questa prova non richiede carta, non effettua pagamenti, non attiva un abbonamento e non modifica analisi o quote.</p>
+      <button id="checkout-restart" class="text-button" type="button" data-i18n="restart">Simula un'altra proposta</button>
+    </section>
+  </main>
+  <footer class="checkout-footer"><span>SLPS AI</span><span data-i18n="footer">Sicurezza sul lavoro · Svizzera</span></footer>
+  <noscript><p class="no-script">JavaScript è necessario. JavaScript is required.</p></noscript>
+</body>
+</html>

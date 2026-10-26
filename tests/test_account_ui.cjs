@@ -102,6 +102,15 @@ test('Workspace link requires every explicit verification flag and backend eligi
   assert.equal(h.nodes['account-workspace'].hidden, true);
 });
 
+test('Checkout CTA is visible only to a verified account when the sandbox is available', async () => {
+  const h = harness([{ data: { ...verified, billing_sandbox_available: true } }]); await h.controller.start();
+  assert.equal(h.nodes['billing-checkout-link'].hidden, false);
+  h.controller.applySession({ ...verified, billing_sandbox_available: false });
+  assert.equal(h.nodes['billing-checkout-link'].hidden, true);
+  h.controller.applySession({ ...pending, billing_sandbox_available: true });
+  assert.equal(h.nodes['billing-checkout-link'].hidden, true);
+});
+
 test('Registration submits one CSRF-protected payload, clears password and makes no analysis request', async () => {
   const h = harness([{ data: anonymous }, { status: 202, data: { registered: true, verification_required: true, delivery_configured: false } }], '/register'); await h.controller.start();
   Object.assign(h.nodes['register-email'], { value: ' person@example.test ' });

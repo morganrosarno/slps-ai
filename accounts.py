@@ -234,6 +234,12 @@ class AccountStore:
                 db.execute("UPDATE consultation_requests SET idempotency_key='legacy:' || id WHERE idempotency_key IS NULL")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS consultation_requests_idempotency
                           ON consultation_requests(company_id,user_id,idempotency_key)""")
+            billing_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(billing_checkout_intents)")
+            }
+            if "expired" not in billing_columns:
+                # Preserve existing sandbox rows while making expiry explicit.
+                db.execute("ALTER TABLE billing_checkout_intents ADD COLUMN expired REAL")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -601,14 +607,16 @@ class AccountStore:
 
     @staticmethod
     def _billing_payload(row, *, replay=False):
+        status = "expired" if row["expired"] is not None else row["status"]
         payload = {
             "checkout_id": row["id"],
-            "status": row["status"],
+            "status": status,
             "selection": json.loads(row["snapshot_json"]),
             "created_at": _utc(row["created"]),
             "expires_at": _utc(row["expires"]),
             "confirmed_at": _utc(row["confirmed"]) if row["confirmed"] is not None else None,
             "cancelled_at": _utc(row["cancelled"]) if row["cancelled"] is not None else None,
+            "expired_at": _utc(row["expired"]) if row["expired"] is not None else None,
             "simulation": True,
             "charged": False,
             "subscription_active": False,
@@ -617,12 +625,36 @@ class AccountStore:
             payload["idempotent_replay"] = True
         return payload
 
+    @staticmethod
+    def _materialize_billing_expiry(db, company_id, user_id, now):
+        """Mark elapsed drafts once and retain the transition in the audit log."""
+        due = db.execute(
+            """SELECT id FROM billing_checkout_intents
+               WHERE company_id=? AND user_id=? AND status='draft'
+                 AND expired IS NULL AND expires<=?""",
+            (company_id, user_id, now),
+        ).fetchall()
+        if not due:
+            return
+        db.executemany(
+            """INSERT INTO billing_checkout_audit
+               (intent_id,company_id,user_id,event,created) VALUES (?,?,?,'expired',?)""",
+            [(row["id"], company_id, user_id, now) for row in due],
+        )
+        db.executemany(
+            "UPDATE billing_checkout_intents SET expired=? WHERE id=? AND expired IS NULL",
+            [(now, row["id"]) for row in due],
+        )
+
     def create_checkout_simulation(self, company_id, user_id, plan_code, billing_cycle, *,
-                                   idempotency_key, now=None, ttl=1800):
+                                   idempotency_key, now=None, ttl=1800, max_open_intents=5):
         """Create an immutable local quote.  No entitlement or payment state is touched."""
         now = time.time() if now is None else float(now)
         if isinstance(ttl, bool) or not 60 <= ttl <= 86400:
             raise ValueError("billing_ttl")
+        if (isinstance(max_open_intents, bool) or not isinstance(max_open_intents, int)
+                or not 1 <= max_open_intents <= 100):
+            raise ValueError("billing_open_limit")
         idempotency_key = clean_text(idempotency_key, "idempotency_key", 128)
         snapshot = self._billing_snapshot(plan_code, billing_cycle)
         snapshot_json = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -632,6 +664,7 @@ class AccountStore:
             db.execute("BEGIN IMMEDIATE")
             if not self._billing_user(db, company_id, user_id):
                 raise ValueError("user")
+            self._materialize_billing_expiry(db, company_id, user_id, now)
             previous = db.execute(
                 """SELECT * FROM billing_checkout_intents
                    WHERE company_id=? AND user_id=? AND idempotency_key_hash=?""",
@@ -645,6 +678,14 @@ class AccountStore:
                     (previous["id"], company_id, user_id, "idempotency_replay", now),
                 )
                 return self._billing_payload(previous, replay=True)
+            open_count = db.execute(
+                """SELECT COUNT(*) FROM billing_checkout_intents
+                   WHERE company_id=? AND user_id=? AND status='draft'
+                     AND expired IS NULL AND expires>?""",
+                (company_id, user_id, now),
+            ).fetchone()[0]
+            if open_count >= max_open_intents:
+                raise BillingSandboxConflict("open_intent_limit")
             intent_id = secrets.token_hex(16)
             db.execute(
                 """INSERT INTO billing_checkout_intents
@@ -661,12 +702,15 @@ class AccountStore:
             row = db.execute("SELECT * FROM billing_checkout_intents WHERE id=?", (intent_id,)).fetchone()
             return self._billing_payload(row)
 
-    def get_checkout_simulation(self, checkout_id, company_id, user_id):
+    def get_checkout_simulation(self, checkout_id, company_id, user_id, *, now=None):
         if not isinstance(checkout_id, str) or len(checkout_id) > 64:
             return None
+        now = time.time() if now is None else float(now)
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             if not self._billing_user(db, company_id, user_id):
                 raise ValueError("user")
+            self._materialize_billing_expiry(db, company_id, user_id, now)
             row = db.execute(
                 "SELECT * FROM billing_checkout_intents WHERE id=? AND company_id=? AND user_id=?",
                 (checkout_id, company_id, user_id),
@@ -681,12 +725,15 @@ class AccountStore:
             db.execute("BEGIN IMMEDIATE")
             if not self._billing_user(db, company_id, user_id):
                 raise ValueError("user")
+            self._materialize_billing_expiry(db, company_id, user_id, now)
             row = db.execute(
                 "SELECT * FROM billing_checkout_intents WHERE id=? AND company_id=? AND user_id=?",
                 (checkout_id, company_id, user_id),
             ).fetchone()
             if not row:
                 raise BillingSandboxConflict("checkout_not_found")
+            if row["expired"] is not None:
+                raise BillingSandboxConflict("checkout_expired")
             if row["status"] == target:
                 return self._billing_payload(row, replay=True)
             if row["status"] != "draft":

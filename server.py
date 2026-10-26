@@ -746,6 +746,7 @@ def create_app(test_config=None):
         AUTH_MODE=os.getenv("SLPS_AUTH_MODE", "pilot"),
         ACCOUNT_REGISTRATION_OPEN=os.getenv("SLPS_ACCOUNT_REGISTRATION_OPEN", "false").lower() == "true",
         BILLING_SANDBOX_ENABLED=os.getenv("SLPS_BILLING_SANDBOX_ENABLED", "false").lower() == "true",
+        BILLING_SANDBOX_MAX_OPEN_INTENTS=int(os.getenv("SLPS_BILLING_SANDBOX_MAX_OPEN_INTENTS", "5")),
         ACCOUNT_DB_PATH=os.getenv("SLPS_ACCOUNT_DB_PATH", str(Path(app.instance_path) / "accounts.sqlite3")),
         SESSION_COOKIE_SECURE=os.getenv("SLPS_COOKIE_SECURE", "true").lower() != "false",
         SESSION_COOKIE_HTTPONLY=True,
@@ -895,6 +896,10 @@ def create_app(test_config=None):
                 payload["account"] = public
                 payload["verification_required"] = not bool(public and public["eligible_for_analysis"])
                 payload["configured"] = bool(ready and not payload["verification_required"])
+                payload["billing_sandbox_available"] = bool(
+                    app.config["BILLING_SANDBOX_ENABLED"]
+                    and public and public["eligible_for_analysis"]
+                )
         return payload
 
     def error(code, message, status, **extra):
@@ -979,6 +984,18 @@ def create_app(test_config=None):
     @app.get("/account")
     def account_page():
         return render_template("account.html")
+
+    @app.get("/account/checkout")
+    def checkout_page():
+        if (not account_mode() or not auth_configured()
+                or not app.config.get("BILLING_SANDBOX_ENABLED")):
+            return redirect("/account")
+        validate_session_mode()
+        user = current_account()
+        if (not session.get("authenticated") or not user
+                or not accounts.public(user)["eligible_for_analysis"]):
+            return redirect("/account")
+        return render_template("checkout.html")
 
     @app.get("/app/")
     @app.get("/app")
@@ -1159,10 +1176,13 @@ def create_app(test_config=None):
             state = accounts.create_checkout_simulation(
                 user["company_id"], user["id"], data.get("plan_code"),
                 data.get("billing_cycle"), idempotency_key=key,
+                max_open_intents=app.config["BILLING_SANDBOX_MAX_OPEN_INTENTS"],
             )
         except BillingSandboxConflict as exc:
             if str(exc) == "idempotency_mismatch":
                 return error("idempotency_mismatch", "Richiesta duplicata non coerente.", 409)
+            if str(exc) == "open_intent_limit":
+                return error("open_intent_limit", "Concludi o attendi la scadenza delle simulazioni aperte.", 409)
             return error("checkout_unavailable", "Simulazione non disponibile.", 409)
         except (ValueError, TypeError):
             return error("invalid_checkout", "Piano o ciclo non valido.", 400)
@@ -1181,8 +1201,15 @@ def create_app(test_config=None):
             state = accounts.transition_checkout_simulation(
                 checkout_id, user["company_id"], user["id"], target,
             )
-        except (BillingSandboxConflict, ValueError):
-            return error("checkout_not_found", "Simulazione non disponibile o già conclusa.", 404)
+        except BillingSandboxConflict as exc:
+            code = str(exc)
+            if code == "checkout_expired":
+                return error("checkout_expired", "La simulazione è scaduta.", 409)
+            if code == "checkout_already_final":
+                return error("checkout_already_final", "La simulazione è già conclusa.", 409)
+            return error("checkout_not_found", "Simulazione non disponibile.", 404)
+        except ValueError:
+            return error("checkout_not_found", "Simulazione non disponibile.", 404)
         replay = state.pop("idempotent_replay", False)
         return jsonify(checkout=state, idempotent_replay=replay)
 
