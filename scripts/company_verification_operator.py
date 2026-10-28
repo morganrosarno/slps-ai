@@ -66,6 +66,9 @@ def _parser() -> JsonArgumentParser:
     audit = commands.add_parser("audit", add_help=False)
     audit.add_argument("review_id")
 
+    dossier = commands.add_parser("dossier", add_help=False)
+    dossier.add_argument("review_id")
+
     evidence = commands.add_parser("evidence", add_help=False)
     evidence.add_argument("review_id")
     evidence.add_argument(
@@ -248,7 +251,7 @@ def _help_document() -> dict[str, object]:
     return {
         "ok": True,
         "operation": "help",
-        "commands": ["list", "audit", "evidence", "approve", "reject"],
+        "commands": ["list", "audit", "dossier", "evidence", "approve", "reject"],
         "capability_sources": [SECRET_ENV, "--secret-fd"],
         "database_sources": [DB_ENV, "--db"],
         "decision_sources": [[OPERATOR_ENV, IDEMPOTENCY_ENV], "--decision-fd"],
@@ -291,6 +294,14 @@ def _execute(args: argparse.Namespace, env: Mapping[str, str]) -> dict[str, obje
                 "created_at_utc": event["created_at_utc"],
                 "evidence_bound": event["evidence_bound"],
             } for event in events],
+        }
+    if args.command == "dossier":
+        return {
+            "ok": True,
+            "operation": "dossier",
+            "dossier": store.verification_decision_dossier(
+                args.review_id, authorization=secret,
+            ),
         }
     if args.command == "evidence":
         (verifier_ref, idempotency_key, observed_at, verified_at, expires_at,

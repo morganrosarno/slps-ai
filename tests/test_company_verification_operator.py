@@ -105,6 +105,7 @@ def assert_binding_failure_before_store(
     commands = [
         (("list",), {}),
         (("audit", review_id), {}),
+        (("dossier", review_id), {}),
         (("approve", review_id, "--reason", "identity_and_authority_confirmed"),
          decision_env()),
         (("reject", review_id, "--reason", "insufficient_evidence"),
@@ -205,6 +206,47 @@ def test_approve_and_audit_are_redacted_and_replay_is_idempotent(tmp_path):
     assert "event_hash" not in rendered
     assert "previous_hash" not in rendered
     assert not re.search(r"\b[a-f0-9]{64}\b", first[2] + rendered)
+
+
+def test_dossier_is_deterministic_and_contains_only_decision_metadata(tmp_path):
+    path, _accounts, user, review = setup_review(tmp_path)
+    args = (
+        "approve", review["id"], "--reason", "identity_and_authority_confirmed",
+        *evidence_args(review),
+    )
+    assert run_tool(path, *args, env=decision_env())[0] == 0
+
+    database_before = path.read_bytes()
+    first = run_tool(path, "dossier", review["id"])
+    second = run_tool(path, "dossier", review["id"])
+
+    assert first == second
+    assert path.read_bytes() == database_before
+    assert first[0] == 0
+    assert set(first[1]) == {"ok", "operation", "dossier"}
+    dossier = first[1]["dossier"]
+    assert set(dossier) == {
+        "review_id", "kind", "status", "decision_code", "created_at_utc",
+        "updated_at_utc", "decided_at_utc", "chain_valid", "evidence",
+    }
+    assert dossier["review_id"] == review["id"]
+    assert dossier["status"] == "approved"
+    assert dossier["decision_code"] == "identity_and_authority_confirmed"
+    assert dossier["chain_valid"] is True
+    assert [item["category"] for item in dossier["evidence"]] == [
+        "commercial_register_extract", "representative_authority_record",
+    ]
+    assert all(set(item) == {
+        "category", "observed_at_utc", "verified_at_utc", "expires_at_utc",
+        "bound_to_decision",
+    } for item in dossier["evidence"])
+    assert all(item["bound_to_decision"] is True for item in dossier["evidence"])
+    for private_value in (
+        user["company_id"], user["id"], "private-owner", "example.test",
+        "operator-1", OPERATOR_REF, IDEMPOTENCY_KEY, SECRET_TEXT, str(path),
+    ):
+        assert private_value not in first[2]
+    assert not re.search(r"\b[a-f0-9]{64}\b", first[2])
 
 
 def test_missing_invalid_and_mismatched_capability_fail_closed_with_same_error(tmp_path):
@@ -326,10 +368,68 @@ def test_corrupt_audit_blocks_queue_audit_and_decision(tmp_path):
         *evidence_args(review), env=decision_env(),
     )
 
-    for result in (listed, audited, decided):
+    dossier = run_tool(path, "dossier", review["id"])
+
+    for result in (listed, audited, dossier, decided):
         assert result[:2] == (4, {"ok": False, "error": {"code": "audit_invalid"}})
     current = accounts.get_user(user["id"])
     assert not current["company_verified"] and not current["membership_verified"]
+
+
+def test_pending_dossier_rejects_spurious_decision_time(tmp_path):
+    path, _accounts, _user, review = setup_review(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "UPDATE account_verification_reviews SET decided=? WHERE id=?",
+            (1_800_000_000, review["id"]),
+        )
+
+    status, document, _rendered = run_tool(path, "dossier", review["id"])
+
+    assert (status, document) == (
+        4, {"ok": False, "error": {"code": "audit_invalid"}},
+    )
+
+
+def test_decided_dossier_rejects_missing_decision_time(tmp_path):
+    path, _accounts, _user, review = setup_review(tmp_path)
+    assert run_tool(
+        path, "approve", review["id"], "--reason", "identity_and_authority_confirmed",
+        *evidence_args(review), env=decision_env(),
+    )[0] == 0
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "UPDATE account_verification_reviews SET decided=NULL WHERE id=?",
+            (review["id"],),
+        )
+
+    status, document, _rendered = run_tool(path, "dossier", review["id"])
+
+    assert (status, document) == (
+        4, {"ok": False, "error": {"code": "audit_invalid"}},
+    )
+
+
+def test_dossier_rejects_non_finite_or_incoherent_review_times(tmp_path):
+    mutations = (
+        ("created", 1_700_000_001),
+        ("updated", float("inf")),
+    )
+    for index, (field, value) in enumerate(mutations):
+        case = tmp_path / str(index)
+        case.mkdir()
+        path, _accounts, _user, review = setup_review(case)
+        with sqlite3.connect(path) as db:
+            db.execute(
+                f"UPDATE account_verification_reviews SET {field}=? WHERE id=?",
+                (value, review["id"]),
+            )
+
+        status, document, _rendered = run_tool(path, "dossier", review["id"])
+
+        assert (status, document) == (
+            4, {"ok": False, "error": {"code": "audit_invalid"}},
+        )
 
 
 def test_secret_and_decision_material_can_be_read_from_file_descriptors(tmp_path):

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -15,6 +16,7 @@ from scripts import preflight
 
 
 PASSWORD = "a-long-local-test-passphrase"
+VERIFICATION_SECRET = b"synthetic-operator-secret-32-bytes!"
 
 
 def profile_values(root: Path) -> dict[str, str]:
@@ -174,6 +176,23 @@ def test_snapshot_rejects_symlinked_destination_component(tmp_path):
 
 def test_full_snapshot_restore_preserves_migrations_media_and_tenant_isolation(tmp_path):
     profile, user, case_id = populated_profile(tmp_path)
+    source_accounts = AccountStore(
+        profile.account_db, verification_operator_secret=VERIFICATION_SECRET,
+    )
+    review = source_accounts.list_verification_reviews(
+        authorization=VERIFICATION_SECRET,
+    )[0]
+    source_accounts.record_verification_evidence(
+        review["id"], category="commercial_register_extract",
+        content_sha256=hashlib.sha256(b"synthetic snapshot evidence").hexdigest(),
+        observed_at=1_700_000_000, verified_at=1_750_000_000,
+        expires_at=2_800_000_000, verifier_ref="snapshot-operator",
+        idempotency_key="verification:evidence:snapshot-dossier-0001",
+        authorization=VERIFICATION_SECRET, now=1_800_000_000,
+    )
+    expected_dossier = source_accounts.verification_decision_dossier(
+        review["id"], authorization=VERIFICATION_SECRET,
+    )
     backup = tmp_path / "backup"
     manifest = create_snapshot(profile, backup, quiesced=True)
     assert {item["name"] for item in manifest["files"] if item["kind"] == "sqlite"} == {
@@ -185,9 +204,14 @@ def test_full_snapshot_restore_preserves_migrations_media_and_tenant_isolation(t
     empty_target = tmp_path / "restored"
     empty_target.mkdir()
     restored = restore_snapshot(backup, empty_target, min_free_bytes=1)
-    accounts = AccountStore(restored.account_db)
+    accounts = AccountStore(
+        restored.account_db, verification_operator_secret=VERIFICATION_SECRET,
+    )
     assert accounts.authenticate("owner@example.test", PASSWORD)["id"] == user["id"]
     assert accounts.schema_versions() == (1, 2, 3, 4, 5)
+    assert accounts.verification_decision_dossier(
+        review["id"], authorization=VERIFICATION_SECRET,
+    ) == expected_dossier
     limits = LimitStore(restored.rate_db)
     assert limits.schema_versions() == (1, 2, 3, 4)
     with limits.connect() as db:

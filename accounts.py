@@ -268,6 +268,15 @@ def _unchecked_verification_audit(db, review):
     ).fetchall()
     if not rows or len(rows) > 2 or len(rows) != int(review["version"]):
         raise VerificationReviewConflict("verification_audit_invalid")
+    review_created = float(review["created"])
+    review_updated = float(review["updated"])
+    event_times = [float(row["created"]) for row in rows]
+    if (not all(0 <= value < float("inf")
+                for value in (review_created, review_updated, *event_times))
+            or review_created != event_times[0]
+            or any(current < previous
+                   for previous, current in zip(event_times, event_times[1:]))):
+        raise VerificationReviewConflict("verification_audit_invalid")
     previous = None
     for expected_sequence, row in enumerate(rows, start=1):
         expected = _verification_event_hash(
@@ -294,12 +303,21 @@ def _unchecked_verification_audit(db, review):
     if review["status"] == "pending":
         if (len(rows) != 1 or review["decision_key_hash"] is not None
                 or review["decision_code"] is not None
-                or review["decision_actor_digest"] is not None):
+                or review["decision_actor_digest"] is not None
+                or review["decided"] is not None
+                or review_updated != event_times[0]):
             raise VerificationReviewConflict("verification_audit_invalid")
-    elif (review["decision_key_hash"] != last["idempotency_key_hash"]
-          or review["decision_code"] != last["decision_code"]
-          or review["decision_actor_digest"] != last["actor_digest"]):
-        raise VerificationReviewConflict("verification_audit_invalid")
+    else:
+        if review["decided"] is None:
+            raise VerificationReviewConflict("verification_audit_invalid")
+        decided = float(review["decided"])
+        if (not 0 <= decided < float("inf")
+                or review["decision_key_hash"] != last["idempotency_key_hash"]
+                or review["decision_code"] != last["decision_code"]
+                or review["decision_actor_digest"] != last["actor_digest"]
+                or decided != event_times[-1]
+                or review_updated != event_times[-1]):
+            raise VerificationReviewConflict("verification_audit_invalid")
     if last["evidence_bundle_hash"] is not None:
         links = db.execute(
             """SELECT receipt_id,receipt_hash
@@ -780,6 +798,86 @@ class AccountStore:
             "previous_hash": row["previous_hash"], "event_hash": row["event_hash"],
             "evidence_bound": row["evidence_bundle_hash"] is not None,
         } for row in rows]
+
+    def verification_decision_dossier(self, review_id, *, authorization):
+        """Return a read-only, redacted review dossier from one DB snapshot.
+
+        ``chain_valid`` describes the internal audit and receipt linkage only.
+        It is not a statement about the legal authenticity of the evidence.
+        """
+        self._authorize_verification_operator(authorization)
+        if not isinstance(review_id, str) or not re.fullmatch(r"[a-f0-9]{32}", review_id):
+            raise ValueError("verification_review_id")
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN")
+                review = db.execute(
+                    "SELECT * FROM account_verification_reviews WHERE id=?", (review_id,),
+                ).fetchone()
+                _verified_verification_audit(db, review)
+                receipts = db.execute(
+                    """SELECT * FROM account_verification_evidence_receipts
+                       WHERE review_id=?
+                       ORDER BY category,observed_at,verified_at,expires_at,created,id""",
+                    (review_id,),
+                ).fetchall()
+                links = db.execute(
+                    """SELECT receipt_id,receipt_hash
+                       FROM account_verification_decision_evidence
+                       WHERE review_id=? ORDER BY receipt_id""",
+                    (review_id,),
+                ).fetchall()
+                receipt_by_id = {}
+                for receipt in receipts:
+                    if (receipt["category"] not in
+                            VERIFICATION_EVIDENCE_CATEGORIES[review["review_kind"]]
+                            or receipt["expires_at"] is None
+                            or not (0 <= float(receipt["observed_at"])
+                                    <= float(receipt["verified_at"])
+                                    < float("inf"))
+                            or not (float(receipt["verified_at"])
+                                    < float(receipt["expires_at"]) < float("inf"))
+                            or not hmac.compare_digest(
+                                receipt["receipt_hash"],
+                                _verification_evidence_hash(receipt),
+                            )):
+                        raise VerificationReviewConflict("verification_evidence_invalid")
+                    receipt_by_id[receipt["id"]] = receipt
+                bound_ids = set()
+                for link in links:
+                    receipt = receipt_by_id.get(link["receipt_id"])
+                    if (receipt is None
+                            or not hmac.compare_digest(
+                                link["receipt_hash"], receipt["receipt_hash"],
+                            )):
+                        raise VerificationReviewConflict("verification_audit_invalid")
+                    bound_ids.add(link["receipt_id"])
+                if review["status"] == "pending" and bound_ids:
+                    raise VerificationReviewConflict("verification_audit_invalid")
+                evidence = [{
+                    "category": receipt["category"],
+                    "observed_at_utc": _utc(receipt["observed_at"]),
+                    "verified_at_utc": _utc(receipt["verified_at"]),
+                    "expires_at_utc": _utc(receipt["expires_at"]),
+                    "bound_to_decision": receipt["id"] in bound_ids,
+                } for receipt in receipts]
+        except VerificationReviewConflict:
+            raise
+        except (TypeError, ValueError, UnicodeError, OverflowError) as exc:
+            raise VerificationReviewConflict("verification_evidence_invalid") from exc
+        return {
+            "review_id": review["id"],
+            "kind": review["review_kind"],
+            "status": review["status"],
+            "decision_code": review["decision_code"],
+            "created_at_utc": _utc(review["created"]),
+            "updated_at_utc": _utc(review["updated"]),
+            "decided_at_utc": (
+                _utc(review["decided"]) if review["decided"] is not None else None
+            ),
+            "chain_valid": True,
+            "evidence": evidence,
+        }
 
     @staticmethod
     def _evidence_public(row):

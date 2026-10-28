@@ -168,6 +168,58 @@ def test_receipt_idempotency_replays_exactly_and_rejects_changed_payload(tmp_pat
         )
 
 
+def test_pending_dossier_marks_valid_receipts_unbound_without_identity_fields(tmp_path):
+    path, store, user, review = setup_company(tmp_path)
+    receipt = record(
+        store, review, "commercial_register_extract", token="pending-dossier",
+    )
+
+    dossier = store.verification_decision_dossier(
+        review["id"], authorization=SECRET,
+    )
+
+    assert dossier == {
+        "review_id": review["id"],
+        "kind": "company_representative",
+        "status": "pending",
+        "decision_code": None,
+        "created_at_utc": review["created_at_utc"],
+        "updated_at_utc": review["updated_at_utc"],
+        "decided_at_utc": None,
+        "chain_valid": True,
+        "evidence": [{
+            "category": "commercial_register_extract",
+            "observed_at_utc": receipt["observed_at_utc"],
+            "verified_at_utc": receipt["verified_at_utc"],
+            "expires_at_utc": receipt["expires_at_utc"],
+            "bound_to_decision": False,
+        }],
+    }
+    rendered = json.dumps(dossier, sort_keys=True)
+    for forbidden in (
+        user["company_id"], user["id"], "owner-one", "example.test",
+        "operator-code", str(path),
+    ):
+        assert forbidden not in rendered
+    assert not re.search(r"\b[a-f0-9]{64}\b", rendered)
+
+
+def test_dossier_fails_closed_on_pending_receipt_tamper(tmp_path):
+    path, store, _user, review = setup_company(tmp_path)
+    receipt = record(
+        store, review, "commercial_register_extract", token="dossier-tamper",
+    )
+    with sqlite3.connect(path) as db:
+        db.execute("DROP TRIGGER account_verification_evidence_receipts_no_update")
+        db.execute(
+            "UPDATE account_verification_evidence_receipts SET content_sha256=? WHERE id=?",
+            ("0" * 64, receipt["id"]),
+        )
+
+    with pytest.raises(VerificationReviewConflict, match="evidence_invalid"):
+        store.verification_decision_dossier(review["id"], authorization=SECRET)
+
+
 def test_post_decision_evidence_link_tamper_invalidates_audit(tmp_path):
     path, store, _user, review = setup_company(tmp_path)
     receipt_ids = company_packet(store, review, prefix="audit")
@@ -185,6 +237,8 @@ def test_post_decision_evidence_link_tamper_invalidates_audit(tmp_path):
         )
     with pytest.raises(VerificationReviewConflict, match="audit_invalid"):
         store.verification_review_audit(review["id"], authorization=SECRET)
+    with pytest.raises(VerificationReviewConflict, match="audit_invalid"):
+        store.verification_decision_dossier(review["id"], authorization=SECRET)
 
 
 def test_cli_hashes_evidence_from_fd_and_redacts_receipt_output(tmp_path):
@@ -222,3 +276,4 @@ def test_public_server_has_no_evidence_operator_route(tmp_path):
     source = open("server.py", encoding="utf-8").read()
     assert "record_verification_evidence" not in source
     assert "evidence_receipt_ids" not in source
+    assert "verification_decision_dossier" not in source

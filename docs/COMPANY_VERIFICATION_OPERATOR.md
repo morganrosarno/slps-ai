@@ -1,8 +1,9 @@
 # Comando offline per la verifica aziendale
 
 `scripts/company_verification_operator.py` è l'interfaccia locale protetta per
-consultare le pratiche pendenti, registrare una ricevuta delle prove esaminate,
-registrare una decisione codificata e verificare la relativa catena audit. Non
+consultare le pratiche pendenti, produrre un dossier decisionale depurato,
+registrare una ricevuta delle prove esaminate, registrare una decisione
+codificata e verificare la relativa catena audit. Non
 avvia il server, non espone rotte HTTP, non usa la rete e non invia messaggi. La
 verifica umana e l'acquisizione dei documenti restano processi separati: la CLI
 legge i byte da un descrittore, conserva soltanto SHA-256 e metadati tecnici e
@@ -34,8 +35,9 @@ costruire lo store, ogni comando richiede in sola lettura la tabella
 `account_verification_operator_meta`, la riga `singleton=1` e un fingerprint
 valido corrispondente alla capacità fornita. Se tabella o riga mancano, il
 database account usato normalmente dal server resta invariato e `list`,
-`audit`, `approve` e `reject` falliscono. Il comando non crea la tabella, non
-inserisce la riga e non associa o ruota implicitamente una capacità.
+`audit`, `dossier`, `evidence`, `approve` e `reject` falliscono. Il comando non
+crea la tabella, non inserisce la riga e non associa o ruota implicitamente una
+capacità.
 
 Esempio con descrittore ereditato da un secret store locale:
 
@@ -131,6 +133,30 @@ entrano nella catena audit append-only. Ripetere la stessa decisione con identic
 riferimento operatore e chiave restituisce lo stesso risultato senza aggiungere
 eventi soltanto con lo stesso insieme di ricevute; riusare la chiave per
 un'altra decisione o un altro pacchetto fallisce.
+
+## Dossier decisionale in sola lettura
+
+```sh
+python scripts/company_verification_operator.py \
+  --db /percorso/privato/accounts.sqlite3 --secret-fd 3 \
+  dossier REVIEW_ID 3</run/secrets/operator
+```
+
+`dossier` controlla prima la capacità, l'integrità SQLite, la catena audit,
+tutte le ricevute della pratica e gli eventuali legami della decisione. Opera
+nel medesimo snapshot del database e non modifica la pratica. Restituisce
+soltanto `review_id`, tipo, stato, codice decisione, tempi, `chain_valid` e, per
+ogni ricevuta, categoria, tempi e `bound_to_decision`. Una pratica `pending`
+ha codice e tempo decisione nulli e ricevute non legate; una pratica decisa
+distingue le ricevute incluse nel pacchetto da quelle non incluse.
+
+Il dossier non mostra identificativi azienda o utente, email, nomi, contenuti,
+digest, hash, riferimenti operatore, chiavi idempotenti, segreti o percorsi.
+`chain_valid: true` certifica esclusivamente la coerenza tecnica locale della
+catena e dei legami registrati. Non autentica legalmente un documento, non
+interroga registri esterni e non sostituisce la verifica umana. Una ricevuta,
+un evento audit o un legame manomesso chiude l'operazione senza dossier. Il
+comando non espone rotte pubbliche, non usa la rete e non invia dati.
 
 ## Audit e output
 
