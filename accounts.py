@@ -239,6 +239,63 @@ def _verification_event_hash(review_id, sequence, event, decision_code, actor_di
     return hashlib.sha256(payload).hexdigest()
 
 
+def _unchecked_verification_audit(db, review):
+    if not review:
+        raise VerificationReviewConflict("verification_review_unavailable")
+    rows = db.execute(
+        """SELECT sequence,event,decision_code,actor_digest,
+                  idempotency_key_hash,created,previous_hash,event_hash
+           FROM account_verification_audit WHERE review_id=?
+           ORDER BY sequence""",
+        (review["id"],),
+    ).fetchall()
+    if not rows or len(rows) > 2 or len(rows) != int(review["version"]):
+        raise VerificationReviewConflict("verification_audit_invalid")
+    previous = None
+    for expected_sequence, row in enumerate(rows, start=1):
+        expected = _verification_event_hash(
+            review["id"], row["sequence"], row["event"], row["decision_code"],
+            row["actor_digest"], row["idempotency_key_hash"], row["created"],
+            previous,
+        )
+        if (row["sequence"] != expected_sequence or row["previous_hash"] != previous
+                or not hmac.compare_digest(row["event_hash"], expected)):
+            raise VerificationReviewConflict("verification_audit_invalid")
+        previous = row["event_hash"]
+    first, last = rows[0], rows[-1]
+    if (first["event"] != "submitted" or first["decision_code"] is not None
+            or first["actor_digest"] is not None or first["previous_hash"] is not None
+            or not hmac.compare_digest(previous, review["audit_head"])):
+        raise VerificationReviewConflict("verification_audit_invalid")
+    expected_final_events = {
+        "pending": {"submitted"},
+        "approved": {"approved", "trusted_fixture_approved"},
+        "rejected": {"rejected"},
+    }
+    if last["event"] not in expected_final_events.get(review["status"], set()):
+        raise VerificationReviewConflict("verification_audit_invalid")
+    if review["status"] == "pending":
+        if (len(rows) != 1 or review["decision_key_hash"] is not None
+                or review["decision_code"] is not None
+                or review["decision_actor_digest"] is not None):
+            raise VerificationReviewConflict("verification_audit_invalid")
+    elif (review["decision_key_hash"] != last["idempotency_key_hash"]
+          or review["decision_code"] != last["decision_code"]
+          or review["decision_actor_digest"] != last["actor_digest"]):
+        raise VerificationReviewConflict("verification_audit_invalid")
+    return rows
+
+
+def _verified_verification_audit(db, review):
+    """Load and validate one review's complete audit chain in ``db``'s snapshot."""
+    try:
+        return _unchecked_verification_audit(db, review)
+    except VerificationReviewConflict:
+        raise
+    except (TypeError, ValueError, UnicodeError, OverflowError) as exc:
+        raise VerificationReviewConflict("verification_audit_invalid") from exc
+
+
 def _insert_verification_review(db, company_id, subject_user_id, review_kind, created):
     if review_kind not in VERIFICATION_REVIEW_KINDS:
         raise ValueError("verification_review_kind")
@@ -598,11 +655,14 @@ class AccountStore:
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("verification_review_limit")
         with self.connect() as db:
+            db.execute("BEGIN")
             rows = db.execute(
                 """SELECT * FROM account_verification_reviews
                    WHERE status=? ORDER BY created,id LIMIT ?""",
                 (status, limit),
             ).fetchall()
+            for row in rows:
+                _verified_verification_audit(db, row)
         return [self._review_public(row) for row in rows]
 
     def verification_review_audit(self, review_id, *, authorization):
@@ -611,31 +671,11 @@ class AccountStore:
         if not isinstance(review_id, str) or not re.fullmatch(r"[a-f0-9]{32}", review_id):
             raise ValueError("verification_review_id")
         with self.connect() as db:
+            db.execute("BEGIN")
             review = db.execute(
-                "SELECT audit_head FROM account_verification_reviews WHERE id=?", (review_id,)
+                "SELECT * FROM account_verification_reviews WHERE id=?", (review_id,)
             ).fetchone()
-            rows = db.execute(
-                """SELECT sequence,event,decision_code,actor_digest,
-                          idempotency_key_hash,created,previous_hash,event_hash
-                   FROM account_verification_audit WHERE review_id=?
-                   ORDER BY sequence""",
-                (review_id,),
-            ).fetchall()
-        if not review or not rows:
-            raise VerificationReviewConflict("verification_review_unavailable")
-        previous = None
-        for row in rows:
-            expected = _verification_event_hash(
-                review_id, row["sequence"], row["event"], row["decision_code"],
-                row["actor_digest"], row["idempotency_key_hash"], row["created"],
-                previous,
-            )
-            if row["previous_hash"] != previous or not hmac.compare_digest(
-                    row["event_hash"], expected):
-                raise VerificationReviewConflict("verification_audit_invalid")
-            previous = row["event_hash"]
-        if not hmac.compare_digest(previous, review["audit_head"]):
-            raise VerificationReviewConflict("verification_audit_invalid")
+            rows = _verified_verification_audit(db, review)
         return [{
             "sequence": row["sequence"], "event": row["event"],
             "decision_code": row["decision_code"],
@@ -676,6 +716,7 @@ class AccountStore:
                 ).fetchone()
                 if not review:
                     raise VerificationReviewConflict("verification_review_unavailable")
+                _verified_verification_audit(db, review)
                 if review["decision_key_hash"] == decision_digest:
                     if (review["status"] == status and review["decision_code"] == decision_code
                             and review["decision_actor_digest"] == actor_digest):

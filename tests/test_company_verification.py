@@ -254,6 +254,15 @@ def test_audit_rows_are_append_only_and_tamper_detection_fails_closed(tmp_path):
         )
     with pytest.raises(VerificationReviewConflict, match="audit_invalid"):
         accounts.verification_review_audit(review["id"], authorization=SECRET)
+    with pytest.raises(VerificationReviewConflict, match="audit_invalid"):
+        accounts.list_verification_reviews(authorization=SECRET)
+    with pytest.raises(VerificationReviewConflict, match="audit_invalid"):
+        accounts.decide_verification_review(
+            review["id"], decision="approve",
+            decision_code="identity_and_authority_confirmed",
+            operator_ref="operator-1", idempotency_key=key("t"),
+            authorization=SECRET,
+        )
 
 
 @pytest.mark.parametrize("decision,code", [

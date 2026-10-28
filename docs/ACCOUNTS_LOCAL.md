@@ -29,6 +29,10 @@ are one atomic decision; a later member can be approved only after the company.
 The older `verify_company` shortcut is disabled outside explicit test fixtures.
 No identifier, email domain or submitted role can approve either state.
 
+L'uso operativo locale della coda è descritto nel runbook pubblico
+[`COMPANY_VERIFICATION_OPERATOR.md`](COMPANY_VERIFICATION_OPERATOR.md). Il comando
+rimane fuori dal server e proietta soltanto JSON depurato.
+
 The delivery boundary is provider-neutral and remains deliberately unwired. It
 may prepare verification, password-reset and company-invitation messages only
 after an injected transport is configured and tested; the default path performs
