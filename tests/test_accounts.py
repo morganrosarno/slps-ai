@@ -10,6 +10,7 @@ import pytest
 from accounts import AccountConflict, AccountStore, ConsultationConflict
 from account_delivery_runtime import synthetic_registration_capability
 import server
+from account_registration_nosend import install_synthetic_registration_workflow
 
 PASSWORD = "a-long-local-test-passphrase"
 
@@ -18,7 +19,7 @@ PASSWORD = "a-long-local-test-passphrase"
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "is_analysis_configured", lambda: True)
     monkeypatch.setattr(server, "analizza_immagine", lambda *_: {"summary": "Synthetic account test", "findings": []})
-    return server.create_app({
+    app = server.create_app({
         "TESTING": True, "AUTH_MODE": "accounts", "ACCOUNT_REGISTRATION_OPEN": True,
         "ACCOUNT_REGISTRATION_TEST_CAPABILITY": synthetic_registration_capability(),
         "SECRET_KEY": "a-session-secret-longer-than-32-characters", "PILOT_PASSWORD": None,
@@ -26,6 +27,8 @@ def app(tmp_path, monkeypatch):
         "RATE_DB_PATH": str(tmp_path / "limits.db"), "CASE_DB_PATH": str(tmp_path / "cases.db"),
         "PILOT_PLAN": "internal", "TRIAL_ANALYSES_TOTAL": 100,
     })
+    install_synthetic_registration_workflow(app)
+    return app
 
 
 def csrf(client):

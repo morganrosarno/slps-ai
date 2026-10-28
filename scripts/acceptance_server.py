@@ -44,6 +44,7 @@ def main():
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         import server
         from account_delivery_runtime import synthetic_registration_capability
+        from account_registration_nosend import install_synthetic_registration_workflow
 
         def synthetic_analysis(image, _mime, _context):
             return {
@@ -73,6 +74,7 @@ def main():
             "ANALYSES_PER_HOUR": 100,
         })
         accounts = app.extensions["account_store"]
+        install_synthetic_registration_workflow(app)
         password = "synthetic-browser-test-password"
         for locale in ("it", "de", "fr", "en"):
             for width in (390, 1440):

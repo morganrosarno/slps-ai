@@ -31,6 +31,19 @@ booleans, mappings, environment/HTTP values and arbitrary objects cannot replace
 it. This explicit fixture bypass does not attest production readiness, send a
 message, expose a token, verify a company or enable real-data mode. Removing it
 or changing either required mode closes registration on the next request.
+The opaque capability alone is no longer sufficient: a trusted fixture must
+also call `install_synthetic_registration_workflow(app)` from
+`account_registration_nosend`. This prepares a disposable synthetic ledger and
+binds the workflow to that app's account store. Before account creation, the
+provider-neutral coordinator records the deterministic no-send adapter's
+deliberate rejection (`failed/transport_rejected`). It never records a successful
+email acceptance. The `.example` action link contains a non-actionable synthetic
+token, never issued to the account store or persisted. Only a fresh, final,
+chain-verified rejection allows the existing atomic account + pending-review
+transaction. Coordinator error, uncertainty, success or replay stops before
+account mutation. If the account transaction fails afterward, its rows roll
+back and the independent synthetic rejection remains; this is not a cross-store
+atomic transaction. No adapter/ledger is constructed by anonymous requests.
 
 Registration stores company name, optional identifier, representative role,
 email, language (`it`, `de`, `fr`, `en`) and a password hash. Email confirmation,

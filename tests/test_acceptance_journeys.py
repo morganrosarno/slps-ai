@@ -13,6 +13,7 @@ from PIL import Image
 import pytest
 
 import server
+from account_registration_nosend import install_synthetic_registration_workflow
 import slps_ai
 from account_delivery_runtime import synthetic_registration_capability
 
@@ -53,7 +54,9 @@ def environment(tmp_path, monkeypatch):
         "HISTORY_ROOT": str(tmp_path / "media"),
         "ANALYSES_PER_HOUR": 10,
     }
-    return server.create_app(config), config, calls, outcome
+    app = server.create_app(config)
+    install_synthetic_registration_workflow(app)
+    return app, config, calls, outcome
 
 
 def headers(client, **extra):
@@ -150,6 +153,7 @@ def test_photo_trial_to_history_survives_reopen_and_cannot_be_reused(environment
 
     # Reconstruct all adapters against the same files: counters and media must persist.
     reopened = server.create_app(config)
+    install_synthetic_registration_workflow(reopened)
     returning = reopened.test_client()
     assert login(returning, user["email"])["entitlement"]["analyses_remaining"] == 0
     saved = case(returning, case_id)

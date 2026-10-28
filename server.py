@@ -32,6 +32,8 @@ from durable_storage import profile_from_mapping
 from account_delivery_runtime import (DEFAULT_DELIVERY_TIMEOUT_SECONDS,
                                       DEFAULT_DELIVERY_OUTCOME_RETENTION_SECONDS,
                                       registration_delivery_status)
+from account_registration_nosend import (prepare_synthetic_registration, synthetic_workflow_available,
+                                         SyntheticRegistrationUnavailable)
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -1082,6 +1084,8 @@ def create_app(test_config=None):
             return {"registration_open": False, "registration_status": "closed"}
         status = registration_delivery_status(app.config, testing=app.testing,
                                               root=Path(__file__).resolve().parent)
+        if status == "synthetic_test_only" and not synthetic_workflow_available(app):
+            status = "delivery_unavailable"
         return {"registration_open": status in {"ready", "synthetic_test_only"},
                 "registration_status": status}
 
@@ -1302,9 +1306,13 @@ def create_app(test_config=None):
             return error("registration_rate_limited", "Troppi tentativi. Riprova più tardi.", 429)
         data = request.get_json()
         try:
+            synthetic_workflow = prepare_synthetic_registration(app, data)
             accounts.register(email=data.get("email"), password=data.get("password"),
                               company_name=data.get("company_name"), company_identifier=data.get("company_identifier", ""),
                               role=data.get("role"), locale=data.get("locale", "it"))
+        except SyntheticRegistrationUnavailable:
+            return error("synthetic_registration_unavailable", "La prova sintetica non è stata completata. Nessun account è stato creato.", 503,
+                         registered=False, delivery_configured=False)
         except AccountConflict:
             return error("registration_unavailable", "Registrazione non disponibile con questi dati. Accedi oppure richiedi assistenza per l’azienda esistente.", 409)
         except (ValueError, TypeError):

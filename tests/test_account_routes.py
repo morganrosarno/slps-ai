@@ -2,6 +2,7 @@
 import pytest
 
 import server
+from account_registration_nosend import install_synthetic_registration_workflow
 from account_delivery_runtime import synthetic_registration_capability
 
 
@@ -9,7 +10,7 @@ from account_delivery_runtime import synthetic_registration_capability
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'is_analysis_configured', lambda: True)
     monkeypatch.setattr(server, 'analizza_immagine', lambda *_: pytest.fail('Navigation called the provider'))
-    return server.create_app({
+    app = server.create_app({
         'TESTING': True, 'AUTH_MODE': 'accounts', 'ACCOUNT_REGISTRATION_OPEN': True,
         'ACCOUNT_REGISTRATION_TEST_CAPABILITY': synthetic_registration_capability(),
         'SECRET_KEY': 'synthetic-route-session-secret-32-characters',
@@ -18,6 +19,8 @@ def app(tmp_path, monkeypatch):
         'RATE_DB_PATH': str(tmp_path / 'limits.db'),
         'CASE_DB_PATH': str(tmp_path / 'cases.db'),
     })
+    install_synthetic_registration_workflow(app)
+    return app
 
 
 def signed_in(app, verified=False):

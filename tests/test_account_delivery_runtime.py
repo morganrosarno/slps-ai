@@ -9,6 +9,7 @@ import account_delivery_runtime as runtime
 from delivery_reservations import SQLiteDeliveryReservationStore
 from scripts import preflight
 import server
+from account_registration_nosend import install_synthetic_registration_workflow
 
 PASSWORD = "synthetic-runtime-registration-password"
 DATA = {"email": "fixture@example.test", "password": PASSWORD,
@@ -103,6 +104,7 @@ def test_fixture_capability_requires_exact_testing_and_synthetic_mode(app, testi
 
 def test_explicit_fixture_creates_only_pending_account_and_removal_revokes_immediately(app):
     app.config["ACCOUNT_REGISTRATION_TEST_CAPABILITY"] = runtime.synthetic_registration_capability()
+    install_synthetic_registration_workflow(app)
     client = app.test_client()
     info = client.get("/api/session").json
     assert info["registration_open"] and info["registration_status"] == "synthetic_test_only"
