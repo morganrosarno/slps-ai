@@ -53,11 +53,14 @@ Questa versione prepara una prova riservata al proprietario. Non è ancora il se
 ## Avvio locale
 Python 3.12, `ffmpeg` e `ffprobe` sono richiesti e verificati durante lo sviluppo.
 
-Gli adapter inclusi usano SQLite e filesystem locale e sono abilitati soltanto
-con `SLPS_DATA_MODE=synthetic` (default). `SLPS_DATA_MODE=real` fallisce prima
-di creare database o cartelle: per dati reali servono adapter durevoli ancora
-da scegliere e collaudare. Le migrazioni SQLite sono versionate e verificano
-nome e checksum, ma questa tracciabilità non rende durevole lo storage locale.
+Il default `SLPS_DATA_MODE=synthetic` conserva gli adapter locali non
+certificati. Il profilo esplicito `single-instance` prepara un volume già
+montato, un solo processo, tutti i database e i media confinati sotto una
+radice risolta. Percorsi relativi, esterni, sovrapposti o con symlink bloccano
+l'avvio prima della creazione dei file; viene controllata anche una riserva
+minima di spazio. Il profilo configurato non prova che il provider mantenga il
+volume dopo restart o redeploy: per questo `SLPS_DATA_MODE=real` resta bloccato
+finché l'accettazione operativa del provider non viene integrata nel runtime.
 
 1. Crea un ambiente virtuale e installa requirements.txt.
 2. Configura le variabili descritte in .env.example nell'ambiente del processo.
@@ -128,6 +131,17 @@ Non usarlo ancora come archivio aziendale di produzione.
 La fondazione locale di conservazione, quote, cancellazione e backup/ripristino
 è descritta in `docs/HISTORY_LOCAL.md`. Non applica scadenze automatiche: al
 limite di capacità blocca nuovi salvataggi senza eliminare lo storico esistente.
+
+Il profilo single-instance dispone inoltre di uno snapshot unificato di account
+e billing, limiti, casi e media. Arresta prima il servizio e ogni writer, quindi
+esegui `python scripts/durable_snapshot.py backup /destinazione/assoluta
+--confirm-quiesced`. Il comando usa l'API backup di SQLite, inventaria ogni
+media con dimensione e SHA-256 e pubblica la directory solo a snapshot completo.
+Il ripristino `python scripts/durable_snapshot.py restore /backup /radice-vuota`
+verifica manifest, inventario, checksum, traversal, integrità SQLite e capacità,
+poi installa atomicamente la radice. La destinazione del backup deve stare fuori
+dal volume sorgente. Una prova locale riuscita non sostituisce la prova di
+restart e restore sull'infrastruttura scelta.
 
 La fondazione della registrazione self-service è descritta in `docs/ACCOUNTS_LOCAL.md`.
 È disattivata per default; nel collaudo locale l'invio email e la verifica reale

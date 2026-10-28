@@ -6,11 +6,44 @@ istanza può eliminarli. Il checkout sandbox non cambia questo limite e non deve
 essere usato come prova di persistenza produttiva.
 
 Il servizio dichiara questa separazione con `SLPS_DATA_MODE`: `synthetic` è il
-default e conserva il comportamento del pilota, mentre `real` si arresta prima
-di costruire database o cartelle locali. Anche il preflight segnala il blocco.
-La rimozione richiederà adapter durevoli che implementino gli stessi contratti
-applicativi e prove di ripristino; il solo uso di un percorso persistente non è
-considerato certificazione sufficiente.
+default e conserva il comportamento del pilota. `real` richiede il profilo
+`SLPS_DURABLE_PROFILE=single-instance`, una radice montata già esistente e una
+riserva minima di capacità. Account e billing condividono un SQLite; limiti e
+casi usano due SQLite distinti; i media hanno una cartella distinta. Ogni
+percorso deve essere assoluto, sotto la radice risolta, senza symlink e senza
+sovrapposizioni. Una configurazione incompleta si arresta prima di creare file.
+Anche una configurazione completa non abilita oggi `real`: manca ancora
+l'evidenza operativa di restart, redeploy e ripristino sul provider, che non può
+essere auto-certificata da una variabile d'ambiente.
+
+Questo profilo supporta esclusivamente un processo applicativo e una singola
+istanza. La sua convalida locale non certifica il mount del provider, restart,
+redeploy, cifratura o conservazione. Queste prove restano condizioni di
+accettazione prima dell'uso commerciale.
+
+## Snapshot e ripristino del profilo single-instance
+
+1. Arrestare servizio, worker e ogni altro writer. Lo snapshot rifiuta di
+   procedere senza `--confirm-quiesced`; il flag è un'attestazione operativa,
+   non un meccanismo che arresta processi.
+2. Eseguire `python scripts/durable_snapshot.py backup /backup/assoluto
+   --confirm-quiesced`. La destinazione deve essere nuova e fuori dalla radice
+   sorgente.
+3. Conservare la directory completa. Il manifest include layout relativo,
+   dimensione e SHA-256 di ogni SQLite e media. Ogni SQLite è copiato tramite
+   la sua API di backup e sottoposto a `PRAGMA integrity_check`.
+4. Provare `python scripts/durable_snapshot.py restore /backup/assoluto
+   /radice/vuota`. Il restore rifiuta file inattesi, checksum alterati, symlink,
+   path traversal, database mancanti, spazio insufficiente e destinazioni non
+   vuote; prepara tutto in una directory privata e la rinomina solo a verifica
+   completa.
+5. Avviare una copia isolata sulla radice ripristinata e verificare login,
+   contatori, casi, media e isolamento aziendale. Registrare la prova di restart
+   e restore del provider separatamente: il repository non la dichiara.
+
+Le impronte SHA-256 rilevano corruzioni o differenze rispetto al manifesto. Non
+autenticano il backup contro chi può modificare sia i file sia il manifesto;
+la custodia e il controllo accessi del backup restano responsabilità operativa.
 
 ## Contratti e migrazioni locali
 

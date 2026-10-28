@@ -151,7 +151,8 @@ class LocalBlobStore:
     """Private local blob adapter.  It is deliberately not durability-certified."""
     durable = False
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, capacity_guard=None):
+        self._capacity_guard = capacity_guard
         # All paths returned by this adapter share one absolute base.  This is
         # important when callers configure a relative media root.
         self.root = Path(root).resolve()
@@ -178,6 +179,8 @@ class LocalBlobStore:
     def write(self, relative_path: str | Path, data: bytes) -> Path:
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("Blob data must be bytes")
+        if self._capacity_guard is not None:
+            self._capacity_guard(len(data))
         target = self.resolve(relative_path)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from source_registry import read_registry
+from durable_storage import DurableStorageError, profile_from_mapping
 MASTER_SHA256 = "88a1077d86f78ee1102031739a5a1d1fcfb3750f2aa81639af528b7db8da97b7"
 EXPECTED_START = "gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --threads 1 --timeout 120"
 PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -97,10 +98,49 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
         f"Modalità dati valida: {data_mode if data_mode in {'synthetic', 'real'} else 'non valida'}.",
         "SLPS_DATA_MODE deve essere synthetic oppure real.",
     ))
+    durable_storage_ready = False
     if data_mode == "real":
+        profile_name_ok = env.get("SLPS_DURABLE_PROFILE", "").strip() == "single-instance"
+        results.append(check(
+            "durable_profile", profile_name_ok,
+            "Profilo storage single-instance selezionato.",
+            "Per dati reali SLPS_DURABLE_PROFILE deve essere single-instance.",
+        ))
+        layout_ok = False
+        if profile_name_ok:
+            layout_env = dict(env)
+            layout_env["SLPS_DURABLE_MIN_FREE_BYTES"] = "1"
+            try:
+                profile_from_mapping(layout_env)
+                layout_ok = True
+            except DurableStorageError:
+                pass
+        results.append(check(
+            "durable_layout", layout_ok,
+            "Tutti i database e i media sono confinati nella radice durevole senza symlink o sovrapposizioni.",
+            "Layout durevole incompleto o non sicuro: usa percorsi assoluti distinti sotto SLPS_DURABLE_ROOT.",
+        ))
+        capacity_ok = False
+        if layout_ok:
+            try:
+                profile_from_mapping(env)
+                capacity_ok = True
+            except DurableStorageError:
+                pass
+        results.append(check(
+            "durable_capacity", capacity_ok,
+            "Riserva minima di spazio disponibile verificata localmente.",
+            "La riserva di capacità del volume non è valida o non è disponibile.",
+        ))
+        durable_storage_ready = profile_name_ok and layout_ok and capacity_ok
+        results.append(check(
+            "real_data_storage", durable_storage_ready,
+            "Profilo locale single-instance completo e confinato.",
+            "Dati reali bloccati: il profilo single-instance non è completo e valido.",
+        ))
         results.append(Check(
-            "real_data_storage", "blocker", "blocker",
-            "Dati reali bloccati: gli adapter SQLite e filesystem locali non sono certificati durevoli. Configura e collauda adapter durevoli prima dell'avvio.",
+            "storage_provider_verification", "blocker", "blocker",
+            "Dati reali bloccati: restart, redeploy e ripristino del volume non sono verificati sul provider.",
         ))
     else:
         results.append(check(
@@ -319,10 +359,20 @@ def report(checks: list[Check]) -> dict:
     warnings = sum(item.status == "warning" for item in checks)
     ids = {item.id for item in checks}
     profile = "accounts" if "account_db_path" in ids else "pilot" if "pilot_password" in ids else "invalid"
+    statuses = {item.id: item.status for item in checks}
+    data_real = "durable_profile" in ids
+    storage_profile = (
+        "blocked" if statuses.get("data_mode") != "pass" else
+        "single-instance configured" if data_real and all(statuses.get(item) == "pass" for item in (
+            "durable_profile", "durable_layout", "durable_capacity", "real_data_storage"
+        )) else "blocked" if data_real else "synthetic"
+    )
     return {
         "schema_version": 1,
         "verification_scope": "offline_configuration_only",
         "auth_profile": profile,
+        "storage_profile": storage_profile,
+        "storage_provider_verified": False,
         "ready": blockers == 0,
         "summary": {"blockers": blockers, "warnings": warnings, "passed": len(checks) - blockers - warnings},
         "checks": [asdict(item) for item in checks],

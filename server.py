@@ -28,6 +28,7 @@ from video_analysis import (SyntheticVideoAdapters, VideoAnalysisError,
 from storage_contracts import (LocalBlobStore, SQLiteMigration,
                                apply_sqlite_migrations, migration_versions,
                                require_durable_storage)
+from durable_storage import profile_from_mapping
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -349,11 +350,12 @@ class CaseStore:
     """
     durable = False
 
-    def __init__(self, path, media_root=None, max_history_bytes=DEFAULT_MAX_HISTORY_BYTES):
+    def __init__(self, path, media_root=None, max_history_bytes=DEFAULT_MAX_HISTORY_BYTES,
+                 *, capacity_guard=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.media_root = Path(media_root or (self.path.parent / "history-media"))
-        self.blob_store = LocalBlobStore(self.media_root)
+        self.blob_store = LocalBlobStore(self.media_root, capacity_guard=capacity_guard)
         self.media_root = self.blob_store.root
         self.max_history_bytes = int(max_history_bytes)
         if self.max_history_bytes < 1:
@@ -790,6 +792,9 @@ def create_app(test_config=None):
         PRIVATE_GATE_PASSWORD=os.getenv("SLPS_PRIVATE_GATE_PASSWORD"),
         PROVIDER_REQUESTS_TOTAL=os.getenv("SLPS_PROVIDER_REQUESTS_TOTAL"),
         DATA_MODE=os.getenv("SLPS_DATA_MODE", "synthetic"),
+        DURABLE_PROFILE=os.getenv("SLPS_DURABLE_PROFILE", ""),
+        DURABLE_ROOT=os.getenv("SLPS_DURABLE_ROOT", ""),
+        DURABLE_MIN_FREE_BYTES=os.getenv("SLPS_DURABLE_MIN_FREE_BYTES", "1073741824"),
         ACCOUNT_REGISTRATION_OPEN=os.getenv("SLPS_ACCOUNT_REGISTRATION_OPEN", "false").lower() == "true",
         BILLING_SANDBOX_ENABLED=os.getenv("SLPS_BILLING_SANDBOX_ENABLED", "false").lower() == "true",
         BILLING_SANDBOX_MAX_OPEN_INTENTS=int(os.getenv("SLPS_BILLING_SANDBOX_MAX_OPEN_INTENTS", "5")),
@@ -829,11 +834,20 @@ def create_app(test_config=None):
     app.config["PRIVATE_GATE_ENABLED"] = gate_setting
     if not app.config.get("HISTORY_ROOT"):
         app.config["HISTORY_ROOT"] = str(Path(app.config["CASE_DB_PATH"]).parent / "history-media")
-    # This check must happen before constructors create SQLite files or media
-    # directories.  Current adapters are only certified for synthetic data.
-    require_durable_storage(
-        app.config["DATA_MODE"], AccountStore, LimitStore, CaseStore, LocalBlobStore
-    )
+    # Validate the complete mounted-volume layout before constructors can
+    # create SQLite files or media directories.
+    durable_profile = None
+    if app.config["DATA_MODE"] == "real":
+        if not str(app.config.get("DURABLE_PROFILE") or "").strip():
+            raise RuntimeError("real_data_requires_durable_storage")
+        durable_profile = profile_from_mapping(app.config, env_names=False)
+        # Configuration is necessary but cannot prove that an infrastructure
+        # provider retains the mount across restart/redeploy.  No environment
+        # flag may self-certify that operational acceptance evidence.
+        raise RuntimeError("real_data_requires_provider_verified_durable_storage")
+    else:
+        require_durable_storage(app.config["DATA_MODE"], AccountStore, LimitStore,
+                                CaseStore, LocalBlobStore)
     app.config["MAX_CONTENT_LENGTH"] = max(
         app.config["MAX_IMAGE_BYTES"], app.config["MAX_VIDEO_BYTES"]
     ) + 128 * 1024
@@ -842,10 +856,13 @@ def create_app(test_config=None):
         app.config["CASE_DB_PATH"],
         app.config["HISTORY_ROOT"],
         app.config["MAX_HISTORY_BYTES_PER_TENANT"],
+        capacity_guard=None,
     )
     app.extensions["limit_store"] = store
     app.extensions["case_store"] = case_store
-    accounts = AccountStore(app.config["ACCOUNT_DB_PATH"]) if app.config["AUTH_MODE"] == "accounts" else None
+    accounts = (AccountStore(app.config["ACCOUNT_DB_PATH"])
+                if app.config["AUTH_MODE"] == "accounts" else None)
+    app.extensions["durable_storage_profile"] = durable_profile
     app.extensions["account_store"] = accounts
     # Explicit application-facing persistence ports.  The current local
     # adapter implements both contracts; future durable adapters can replace
