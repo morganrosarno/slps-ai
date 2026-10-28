@@ -22,6 +22,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 PURPOSES = frozenset({"verify_email", "reset_password", "company_invitation"})
 LOCALES = frozenset({"it", "de", "fr", "en"})
+MAX_ACTION_TTL_SECONDS = 24 * 60 * 60
 DEFAULT_ACTION_PATHS = (
     ("verify_email", "/account/verify-email"),
     ("reset_password", "/account/reset-password"),
@@ -161,10 +162,12 @@ class AtomicIdempotencyReservation(Protocol):
 
 
 def _normalize_recipient(value: object) -> str:
-    if (not isinstance(value, str) or value != value.strip() or len(value) > 254
-            or any(ord(c) < 33 or ord(c) > 126 for c in value)):
+    if not isinstance(value, str):
         raise DeliveryBoundaryError("delivery_recipient_invalid", "Destinatario non valido.", 422)
-    lowered = value.lower()
+    lowered = value.strip().lower()
+    if (not lowered or len(lowered) > 254
+            or any(ord(c) < 33 or ord(c) > 126 for c in lowered)):
+        raise DeliveryBoundaryError("delivery_recipient_invalid", "Destinatario non valido.", 422)
     if not re.fullmatch(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", lowered):
         raise DeliveryBoundaryError("delivery_recipient_invalid", "Destinatario non valido.", 422)
     local, domain = lowered.rsplit("@", 1)
@@ -188,16 +191,17 @@ def _action_url(value: object, config: DeliveryConfig, purpose: str) -> str:
     try:
         parts = urlsplit(value)
         pairs = parse_qsl(parts.query, keep_blank_values=True, strict_parsing=True)
+        canonical_path = config.action_path_for(purpose)
         if (parts.scheme != "https" or "@" in parts.netloc or parts.username or parts.password
                 or parts.port not in {None, 443} or parts.hostname not in config.allowed_action_hosts
-                or parts.fragment or parts.path != config.action_path_for(purpose) or "\\" in value
+                or parts.fragment or parts.path != canonical_path or "\\" in value
                 or any(segment in {".", ".."} for segment in unquote(parts.path).split("/"))
                 or len(pairs) != 1 or pairs[0][0] != "token"
                 or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", pairs[0][1])):
             raise ValueError
     except (TypeError, ValueError, UnicodeError):
         raise DeliveryBoundaryError("delivery_action_invalid", "Collegamento di azione non valido.", 422) from None
-    return value
+    return f"https://{parts.hostname}{canonical_path}?token={pairs[0][1]}"
 
 
 def _expires(value: object, now_utc: datetime) -> str:
@@ -211,9 +215,37 @@ def _expires(value: object, now_utc: datetime) -> str:
         raise DeliveryBoundaryError("delivery_expiry_invalid", "Scadenza del collegamento non valida.", 422)
     parsed = parsed.astimezone(timezone.utc)
     seconds = (parsed - now_utc).total_seconds()
-    if not 0 < seconds <= 86400:
+    if not 0 < seconds <= MAX_ACTION_TTL_SECONDS:
         raise DeliveryBoundaryError("delivery_expiry_invalid", "Scadenza del collegamento non valida.", 422)
     return parsed.isoformat().replace("+00:00", "Z")
+
+
+def canonical_delivery_envelope(*, config: DeliveryConfig, recipient: str,
+                                purpose: str, locale: str, action_url: str,
+                                expires_at_utc: str, idempotency_key: str,
+                                now_utc: datetime) -> DeliveryEnvelope:
+    """Validate and canonicalize every value bound to one delivery operation."""
+    if not isinstance(config, DeliveryConfig):
+        _configuration_error()
+    if purpose not in PURPOSES or locale not in LOCALES:
+        raise DeliveryBoundaryError(
+            "delivery_request_invalid", "Richiesta di consegna non valida.", 422,
+        )
+    normalized = _normalize_recipient(recipient)
+    action = _action_url(action_url, config, purpose)
+    if not isinstance(now_utc, datetime) or now_utc.tzinfo is None:
+        _configuration_error()
+    now_utc = now_utc.astimezone(timezone.utc)
+    expiry = _expires(expires_at_utc, now_utc)
+    if (not isinstance(idempotency_key, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{31,127}", idempotency_key)):
+        raise DeliveryBoundaryError(
+            "delivery_request_invalid", "Richiesta di consegna non valida.", 422,
+        )
+    return DeliveryEnvelope(
+        normalized, purpose, locale, action, expiry, idempotency_key,
+        config.timeout_seconds,
+    )
 
 
 class AccountDeliveryBoundary:
@@ -246,33 +278,29 @@ class AccountDeliveryBoundary:
     def dispatch(self, *, recipient: str, purpose: str, locale: str, action_url: str,
                  expires_at_utc: str, idempotency_key: str) -> dict[str, str]:
         """Reserve then perform at most one injected transport attempt."""
-        if purpose not in PURPOSES or locale not in LOCALES:
-            raise DeliveryBoundaryError("delivery_request_invalid", "Richiesta di consegna non valida.", 422)
-        normalized = _normalize_recipient(recipient)
-        action = _action_url(action_url, self.config, purpose)
         try:
             now = self._utc()
-            if not isinstance(now, datetime) or now.tzinfo is None:
-                _configuration_error()
-            now = now.astimezone(timezone.utc)
+            envelope = canonical_delivery_envelope(
+                config=self.config, recipient=recipient, purpose=purpose,
+                locale=locale, action_url=action_url,
+                expires_at_utc=expires_at_utc,
+                idempotency_key=idempotency_key, now_utc=now,
+            )
         except DeliveryBoundaryError:
             raise
         except Exception:
             _configuration_error()
-        expiry = _expires(expires_at_utc, now)
-        if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{31,127}", idempotency_key):
-            raise DeliveryBoundaryError("delivery_request_invalid", "Richiesta di consegna non valida.", 422)
         self._cancelled()
         try:
             reserved = self._reservations.reserve_once(idempotency_key)
+        except DeliveryBoundaryError:
+            raise
         except Exception:
             raise DeliveryBoundaryError("delivery_reservation_failed", "Prenotazione della consegna non disponibile.") from None
         if type(reserved) is not bool:
             _configuration_error()
         if not reserved:
             raise DeliveryBoundaryError("delivery_duplicate", "Consegna già prenotata; nessun nuovo tentativo.", 409)
-        envelope = DeliveryEnvelope(normalized, purpose, locale, action, expiry, idempotency_key,
-                                    self.config.timeout_seconds)
         self._cancelled()
         try:
             started = self._monotonic()

@@ -74,13 +74,34 @@ def test_all_purposes_and_locales_dispatch_once_with_safe_result_and_repr():
             assert "synthetic-message-id" not in json.dumps(result)
 
 
-@pytest.mark.parametrize("recipient", ["", " person@example.test", "a@localhost", "a@127.0.0.1", "a..b@example.test", "a@example", "a\n@example.test", "ü@example.test"])
+@pytest.mark.parametrize("action_url", [
+    f"https://ACCOUNTS.SLPS.EXAMPLE/account/verify-email?token={TOKEN}",
+    f"https://accounts.slps.example:443/account/verify-email?token={TOKEN}",
+    f"https://accounts.slps.example/account/verify-email?token=%73{TOKEN[1:]}",
+])
+def test_equivalent_action_urls_are_canonicalized_for_transport(action_url):
+    transport = Transport()
+    boundary(transport).dispatch(**kwargs(action_url=action_url))
+    assert transport.calls[0].action_url == (
+        f"https://accounts.slps.example/account/verify-email?token={TOKEN}"
+    )
+
+
+@pytest.mark.parametrize("recipient", ["", "a@localhost", "a@127.0.0.1", "a..b@example.test", "a@example", "a\n@example.test", "ü@example.test"])
 def test_invalid_recipient_fails_before_reservation_and_dispatch(recipient):
     transport, reservations = Transport(), Reservations()
     with pytest.raises(DeliveryBoundaryError) as error:
         boundary(transport, reservations).dispatch(**kwargs(recipient=recipient))
     assert error.value.code == "delivery_recipient_invalid"
     assert not transport.calls and not reservations.keys
+
+
+def test_recipient_case_and_outer_whitespace_are_canonicalized():
+    transport = Transport()
+    boundary(transport).dispatch(**kwargs(
+        recipient="  PERSON.SYNTHETIC@EXAMPLE.TEST  ",
+    ))
+    assert transport.calls[0].recipient == "person.synthetic@example.test"
 
 
 @pytest.mark.parametrize("url", [

@@ -26,9 +26,10 @@ OUTCOME_CODES = {
     "accepted": frozenset({"transport_accepted"}),
     "failed": frozenset({
         "transport_rejected", "transport_failed", "invalid_response", "expired",
+        "cancelled_before_dispatch",
     }),
     "uncertain": frozenset({
-        "timeout", "acknowledgement_lost", "cancelled_after_dispatch",
+        "dispatch_started", "timeout", "acknowledgement_lost", "cancelled_after_dispatch",
     }),
 }
 
@@ -108,6 +109,11 @@ class SQLiteDeliveryReservationStore:
                 f"max_reservations={self.policy.max_reservations}, "
                 f"reservation_retention_seconds={self.policy.reservation_retention_seconds}, "
                 f"outcome_retention_seconds={self.policy.outcome_retention_seconds})")
+
+    @property
+    def dispatch_marker_retention_seconds(self) -> int:
+        """Declared durable lifetime of a pre-dispatch outcome marker."""
+        return self.policy.outcome_retention_seconds
 
     def _prepare_path(self) -> None:
         try:
@@ -628,6 +634,97 @@ class SQLiteDeliveryReservationStore:
             self._rollback(db)
             raise
         except sqlite3.Error:
+            self._rollback(db)
+            raise DeliveryReservationError("delivery_reservation_storage_unavailable") from None
+        finally:
+            db.close()
+
+    def reserve_dispatch_started_once(self, key: str, *,
+                                      reconciliation_key: str) -> bool:
+        """Atomically reserve ``key`` and append its pre-dispatch marker.
+
+        The uncertain marker is durable before an adapter can be invoked. Its
+        longer outcome retention prevents a crash from reopening the key when
+        the shorter reservation window expires. A later accepted/failed event
+        may reconcile this marker once through :meth:`record_outcome`.
+        """
+        key = self._key(key, "delivery_reservation_key_invalid")
+        reconciliation_key = self._key(
+            reconciliation_key, "delivery_reconciliation_key_invalid",
+        )
+        now = self._now()
+        expires_at = now + self.policy.reservation_retention_seconds
+        outcome_expires_at = now + self.policy.outcome_retention_seconds
+        if not math.isfinite(expires_at) or not math.isfinite(outcome_expires_at):
+            raise DeliveryReservationError("delivery_reservation_clock_unavailable")
+        digest = self._key_digest(key)
+        reconciliation_digest = self._reconciliation_digest(reconciliation_key)
+        db = self._connect()
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            revision, _ = self._verify_checkpoint(db)
+            deleted = db.execute(
+                """DELETE FROM delivery_reservations
+                   WHERE (outcome_count=0 AND expires_at <= ?)
+                      OR (outcome_count>0 AND expires_at <= ? AND outcome_expires_at <= ?)""",
+                (now, now, now),
+            ).rowcount
+            existing = db.execute(
+                "SELECT * FROM delivery_reservations WHERE key_digest=?", (digest,)
+            ).fetchone()
+            if existing is not None:
+                rows = self._validated_events(db, existing)
+                if (not rows or rows[0]["status"] != "uncertain"
+                        or rows[0]["code"] != "dispatch_started"
+                        or not hmac.compare_digest(
+                            rows[0]["reconciliation_digest"], reconciliation_digest,
+                        )):
+                    raise DeliveryReservationError("delivery_outcome_conflict")
+                if deleted:
+                    self._advance_checkpoint(db, revision)
+                db.commit()
+                return False
+            count = int(db.execute("SELECT COUNT(*) FROM delivery_reservations").fetchone()[0])
+            if count >= self.policy.max_reservations:
+                raise DeliveryReservationError("delivery_reservation_capacity_exhausted")
+            db.execute(
+                "INSERT INTO delivery_reservations(key_digest,reserved_at,expires_at) VALUES (?,?,?)",
+                (digest, now, expires_at),
+            )
+            event_hash = self._event_hash(
+                key_digest=digest, sequence=1, status="uncertain",
+                code="dispatch_started", reconciliation_digest=reconciliation_digest,
+                provider_reference_digest=None, recorded_at=now,
+                previous_hash=None, reserved_at=now, expires_at=expires_at,
+            )
+            db.execute(
+                """INSERT INTO delivery_outcome_events
+                   (key_digest,sequence,status,code,reconciliation_digest,
+                    provider_reference_digest,recorded_at,previous_hash,event_hash)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (digest, 1, "uncertain", "dispatch_started", reconciliation_digest,
+                 None, now, None, event_hash),
+            )
+            db.execute(
+                """UPDATE delivery_reservations
+                   SET outcome_count=1,outcome_head=?,outcome_status='uncertain',
+                       outcome_code='dispatch_started',outcome_updated_at=?,
+                       provider_reference_present=0,outcome_expires_at=?
+                   WHERE key_digest=?""",
+                (event_hash, now, outcome_expires_at, digest),
+            )
+            reservation = db.execute(
+                "SELECT * FROM delivery_reservations WHERE key_digest=?", (digest,),
+            ).fetchone()
+            self._validated_events(db, reservation)
+            self._advance_checkpoint(db, revision)
+            db.commit()
+            return True
+        except DeliveryReservationError:
+            self._rollback(db)
+            raise
+        except (sqlite3.Error, TypeError, ValueError, OverflowError):
             self._rollback(db)
             raise DeliveryReservationError("delivery_reservation_storage_unavailable") from None
         finally:

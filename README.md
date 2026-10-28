@@ -151,6 +151,17 @@ Il confine inattivo ammette un percorso distinto per ciascuna finalità e dispon
 di una prenotazione SQLite idempotente basata su digest HMAC. Questa protezione
 non invia messaggi e non rende attivi i percorsi cliente; impedisce invece un
 secondo tentativo ambiguo quando in futuro sarà iniettato un trasporto approvato.
+Il coordinatore provider-neutral offline registra atomicamente prenotazione e
+marcatore incerto prima dell'unico tentativo dell'adapter, poi riconcilia solo
+un'accettazione o un rifiuto finale. Timeout e crash conservano il marcatore e
+non ripetono l'invio. Il marcatore è legato tramite digest alla richiesta
+canonica completa, incluso l'URL normalizzato; riusare la chiave con
+destinatario, finalità, lingua, azione
+o scadenza diversi fallisce senza invocare l'adapter. Il coordinatore rifiuta
+una retention del marcatore più
+breve del TTL massimo del link, più timeout e margine d'orologio. Resta
+scollegato da `server.py` e i probe usano soltanto adapter finti con socket
+bloccati.
 Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
 il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
 espone un token o finge di aver inviato un'email. Un registro locale separato dalla

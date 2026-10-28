@@ -10,18 +10,28 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from delivery_boundary import (AccountDeliveryBoundary, CancellationToken, DeliveryConfig,
+from delivery_boundary import (CancellationToken, DeliveryBoundaryError, DeliveryConfig,
                                DEFAULT_ACTION_PATHS, DeliveryTransportResult)
+from delivery_provider_readiness import ProviderNeutralDeliveryCoordinator
 from delivery_reservations import DeliveryReservationPolicy, SQLiteDeliveryReservationStore
 
 
 class RecordedTransport:
-    def __init__(self):
+    def __init__(self, result=None, failure=None, before_send=None):
         self.envelopes = []
+        self.result = result if result is not None else DeliveryTransportResult(
+            True, "synthetic-recorded-id",
+        )
+        self.failure = failure
+        self.before_send = before_send
 
     def send(self, envelope, *, cancellation):
         self.envelopes.append(envelope)
-        return DeliveryTransportResult(True, "synthetic-recorded-id")
+        if self.before_send:
+            self.before_send(envelope)
+        if self.failure:
+            raise self.failure
+        return self.result
 
 
 def run():
@@ -32,18 +42,25 @@ def run():
         raise RuntimeError("network forbidden")
 
     now = datetime(2030, 1, 1, tzinfo=timezone.utc)
-    transport = RecordedTransport()
     with TemporaryDirectory() as directory:
         database = Path(directory) / "delivery.sqlite3"
         reservations = SQLiteDeliveryReservationStore(
             database, key_secret=b"offline-conformance-secret-32bytes!",
             policy=DeliveryReservationPolicy(
-                reservation_retention_seconds=600, outcome_retention_seconds=3_600,
+                reservation_retention_seconds=600, outcome_retention_seconds=90_000,
             ), clock=lambda: 1_000,
         )
-        boundary = AccountDeliveryBoundary(
-            config=DeliveryConfig(("accounts.slps.example",)), transport=transport,
-            reservations=reservations, cancellation=CancellationToken(), utc_clock=lambda: now,
+        markers_seen = []
+
+        def verify_pre_dispatch_marker(envelope):
+            event = reservations.outcome_status(envelope.idempotency_key)["outcome"]
+            assert event["status"] == "uncertain" and event["code"] == "dispatch_started"
+            markers_seen.append(event["sequence"])
+
+        transport = RecordedTransport(before_send=verify_pre_dispatch_marker)
+        boundary = ProviderNeutralDeliveryCoordinator(
+            config=DeliveryConfig(("accounts.slps.example",)), adapter=transport,
+            ledger=reservations, cancellation=CancellationToken(), utc_clock=lambda: now,
         )
         with patch.object(socket, "socket", blocked), patch.object(socket, "create_connection", blocked):
             for index, purpose in enumerate(("verify_email", "reset_password", "company_invitation")):
@@ -55,17 +72,48 @@ def run():
                     expires_at_utc=(now + timedelta(hours=1)).isoformat(),
                     idempotency_key=key,
                 )
-                assert result == {"status": "accepted", "purpose": purpose}
-                outcome = reservations.record_outcome(
-                    key, status="accepted", code="transport_accepted",
-                    reconciliation_key=f"delivery-outcome:{purpose}:{'r' * 32}",
-                    provider_reference=f"synthetic-recorded-{index}",
+                assert result["status"] == "accepted" and result["chain_valid"]
+
+            first_key = f"delivery:verify_email:{'i' * 40}"
+            try:
+                boundary.dispatch(
+                    recipient="different@example.test", purpose="verify_email", locale="it",
+                    action_url=("https://accounts.slps.example/account/verify-email"
+                                f"?token={'x' * 32}"),
+                    expires_at_utc=(now + timedelta(hours=1)).isoformat(),
+                    idempotency_key=first_key,
                 )
-                assert outcome["status"] == "accepted" and outcome["chain_valid"]
+            except DeliveryBoundaryError as error:
+                request_binding_conflict = error.code == "delivery_outcome_conflict"
+            else:
+                request_binding_conflict = False
+            assert request_binding_conflict and len(transport.envelopes) == 3
+
+            failure_probes = []
+            scenarios = (
+                ("rejected", RecordedTransport(DeliveryTransportResult(False, "rejected"))),
+                ("timeout", RecordedTransport(failure=TimeoutError("synthetic private"))),
+                ("exception", RecordedTransport(failure=RuntimeError("synthetic private"))),
+                ("invalid", RecordedTransport(result=object())),
+            )
+            for index, (name, fake) in enumerate(scenarios):
+                probe = ProviderNeutralDeliveryCoordinator(
+                    config=DeliveryConfig(("accounts.slps.example",)), adapter=fake,
+                    ledger=reservations, cancellation=CancellationToken(), utc_clock=lambda: now,
+                ).dispatch(
+                    recipient=f"failure-{index}@example.test", purpose="verify_email",
+                    locale="en",
+                    action_url=("https://accounts.slps.example/account/verify-email"
+                                f"?token={'f' * 32}"),
+                    expires_at_utc=(now + timedelta(hours=1)).isoformat(),
+                    idempotency_key=f"delivery:failure:{name}:{'z' * 40}",
+                )
+                failure_probes.append({"name": name, "status": probe["status"],
+                                       "code": probe["code"]})
         restarted = SQLiteDeliveryReservationStore(
             database, key_secret=b"offline-conformance-secret-32bytes!",
             policy=DeliveryReservationPolicy(
-                reservation_retention_seconds=600, outcome_retention_seconds=3_600,
+                reservation_retention_seconds=600, outcome_retention_seconds=90_000,
             ), clock=lambda: 1_000,
         )
         assert restarted.reserve_once(f"delivery:verify_email:{'i' * 40}") is False
@@ -79,7 +127,9 @@ def run():
         "offline_conformance": "passed", "purposes": 3, "single_attempts": 3,
         "network_attempts": 0, "provider_sdk": False, "real_messages_sent": 0,
         "application_wired": False, "durable_restart_duplicate_suppressed": True,
-        "durable_outcomes_verified": 3,
+        "durable_outcomes_verified": 7, "failure_probes": failure_probes,
+        "atomic_pre_dispatch_markers": len(markers_seen),
+        "request_binding_conflict": request_binding_conflict,
     }, sort_keys=True))
 
 

@@ -103,6 +103,56 @@ both; restore tests reopen the pair and verify the outcome chain before use.
 `SLPS_DELIVERY_DB_PATH` and `SLPS_DELIVERY_CHECKPOINT_PATH` must be distinct
 paths below the durable root.
 
+`ProviderNeutralDeliveryCoordinator` is the unwired handoff contract between
+that ledger and a future injected adapter. It validates through the existing
+strict message boundary, reserves before the adapter, invokes the adapter at
+most once and immediately writes an allowlisted redacted outcome. Reservation
+and the initial uncertain `dispatch_started` event are one SQLite transaction;
+the marker is therefore durable before adapter invocation and receives the
+longer outcome-retention window. Explicit rejection or cancellation proven to
+occur before adapter invocation reconciles the marker to a final failure, while
+acceptance reconciles it to final success. Malformed acknowledgement, timeout,
+transport exception or cancellation after dispatch leave `dispatch_started`
+unchanged because none can prove that the provider rejected the operation. The
+marker may be reconciled only once to accepted or failed. A concurrent or later
+replay never invokes the adapter and never rewrites the marker merely to rename
+the uncertainty; it returns the retained event. Before reserving, the validated
+request is canonically bound to the marker with length-framed SHA-256 over the
+operation key, trimmed lowercase recipient, purpose, locale, canonical action URL
+(lowercase host, no default port, approved path and decoded token) and canonical
+UTC expiry. The ledger persists only an HMAC
+digest of that binding. Reusing a key with any different bound value fails with
+a redacted conflict and never projects the old outcome under the new purpose;
+an identical replay, including equivalent recipient case and UTC expiry offset,
+returns the retained outcome. A legacy reservation without this marker fails
+closed without sending. If the final
+outcome write fails, the caller returns the retained marker or an
+already-committed matching final outcome but may not retry the adapter.
+Reconciliation keys are deterministic SHA-256-derived values and are HMACed by
+the ledger; no raw recipient, action token, operation key or provider reference
+is returned.
+
+The marker prevents a second send after the reservation window expires for as
+long as outcome retention remains active. After both configured retention
+windows have elapsed, the bounded ledger may reclaim the row; production policy
+must therefore set outcome retention for the required replay horizon and use a
+durable infrastructure anchor where a longer guarantee is required.
+The coordinator refuses to initialize unless the ledger's read-only declared
+marker retention is at least `MAX_ACTION_TTL_SECONDS + ceil(timeout) + 60`
+seconds. `MAX_ACTION_TTL_SECONDS` is the same 86,400-second limit enforced when
+validating action links; the extra minute is a conservative clock margin. Thus
+an accepted configuration cannot reclaim the marker while even a maximum-TTL
+action link remains valid. A short policy such as 300 seconds fails before any
+reservation or adapter invocation.
+
+This coordinator is still absent from `server.py` and has no provider SDK,
+credentials, endpoint, network client, retry, fallback or background worker.
+`python scripts/delivery_conformance.py` runs accepted, rejected, timeout,
+exception and malformed-response probes against in-memory fake adapters while
+socket creation is blocked. Passing it proves only the offline contract and
+durable bookkeeping, not provider compatibility, deliverability, cost or
+production readiness.
+
 Every protected account request reloads the user, verification flags and session
 version from SQLite. Mode changes invalidate the old authentication session.
 The trial entitlement is shared by all approved users of the same company.

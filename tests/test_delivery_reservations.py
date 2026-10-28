@@ -183,6 +183,46 @@ def test_accepted_outcome_is_durable_redacted_and_idempotent(tmp_path):
         assert private.encode() not in checkpoint
 
 
+def test_dispatch_started_reservation_is_atomic_retained_and_reconcilable(tmp_path):
+    clock = [1_000.0]
+    ledger = store(
+        tmp_path, now=lambda: clock[0], retention=60, outcome_retention=300,
+    )
+    assert ledger.dispatch_marker_retention_seconds == 300
+    with pytest.raises(AttributeError):
+        ledger.dispatch_marker_retention_seconds = 301
+    marker_key = "delivery-dispatch-started:" + "m" * 40
+    assert ledger.reserve_dispatch_started_once(
+        KEY, reconciliation_key=marker_key,
+    ) is True
+    marker = ledger.outcome_status(KEY)["outcome"]
+    assert marker["status"] == "uncertain"
+    assert marker["code"] == "dispatch_started"
+    assert marker["sequence"] == 1 and marker["final"] is False
+
+    clock[0] = 1_061.0
+    assert ledger.reserve_dispatch_started_once(
+        KEY, reconciliation_key=marker_key,
+    ) is False
+    assert ledger.outcome_status(KEY)["outcome"] == marker
+    with pytest.raises(DeliveryReservationError, match="outcome_conflict"):
+        ledger.reserve_dispatch_started_once(
+            KEY, reconciliation_key="delivery-different-request:" + "d" * 40,
+        )
+    assert ledger.outcome_status(KEY)["outcome"] == marker
+    with pytest.raises(DeliveryReservationError, match="outcome_conflict"):
+        ledger.record_outcome(
+            KEY, status="uncertain", code="acknowledgement_lost",
+            reconciliation_key="delivery-rename-marker:" + "r" * 40,
+        )
+    assert ledger.outcome_status(KEY)["outcome"] == marker
+    final = ledger.record_outcome(
+        KEY, status="accepted", code="transport_accepted",
+        reconciliation_key="delivery-final:" + "f" * 40,
+    )
+    assert final["sequence"] == 2 and final["final"] is True
+
+
 def test_uncertain_outcome_can_be_reconciled_once_to_final(tmp_path):
     clock = [1_000.0]
     ledger = store(tmp_path, now=lambda: clock[0])
