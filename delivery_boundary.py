@@ -23,6 +23,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 PURPOSES = frozenset({"verify_email", "reset_password", "company_invitation"})
 LOCALES = frozenset({"it", "de", "fr", "en"})
 MAX_ACTION_TTL_SECONDS = 24 * 60 * 60
+DEFAULT_DELIVERY_TIMEOUT_SECONDS = 8.0
 DEFAULT_ACTION_PATHS = (
     ("verify_email", "/account/verify-email"),
     ("reset_password", "/account/reset-password"),
@@ -72,7 +73,7 @@ class DeliveryConfig:
     """Public policy only; provider endpoints and credentials do not belong here."""
 
     allowed_action_hosts: tuple[str, ...]
-    timeout_seconds: float = 8.0
+    timeout_seconds: float = DEFAULT_DELIVERY_TIMEOUT_SECONDS
     max_action_url_bytes: int = 2048
     action_paths: tuple[tuple[str, str], ...] = DEFAULT_ACTION_PATHS
 

@@ -162,6 +162,43 @@ una retention del marcatore più
 breve del TTL massimo del link, più timeout e margine d'orologio. Resta
 scollegato da `server.py` e i probe usano soltanto adapter finti con socket
 bloccati.
+Il preflight offline verifica ora anche i prerequisiti delivery della modalità
+account. Richiede `SLPS_DELIVERY_RESERVATION_SECRET` stabile e distinto dagli
+altri segreti (32–256 byte, non vuoto, senza caratteri di controllo o placeholder
+ripetitivi), confrontandone soltanto l'impronta con il registro già esistente.
+Non stampa il valore o l'impronta e non inizializza o migra alcun archivio. La
+stabilità osservata non sostituisce la gestione sicura e persistente del segreto.
+Le letture SQLite usano `immutable=1` e rifiutano un archivio con sibling
+`-journal`, `-wal` o `-shm` presenti: non ignorano uno stato ancora nel WAL e
+non creano sidecar, inizializzano archivi o eseguono checkpoint. Anche un file
+principale che cambia durante il controllo fa fallire la lettura. Arrestare i
+writer e predisporre uno snapshot quiescente tramite l’operatore del database;
+il preflight non interviene per renderlo leggibile. I nomi riservati dei sibling
+SQLite non possono essere usati dal checkpoint o dagli altri archivi.
+`SLPS_DELIVERY_DB_PATH` e `SLPS_DELIVERY_CHECKPOINT_PATH` devono essere espliciti,
+assoluti, non temporanei, esterni al codice e separati fra loro, dagli altri
+database e dai media; i componenti esistenti non possono essere symlink e i file
+esistenti devono essere privati e senza hardlink. Non rigenerare il segreto per
+fare ripartire un registro che presenta un'impronta diversa.
+
+`SLPS_DELIVERY_TIMEOUT_SECONDS` e
+`SLPS_DELIVERY_OUTCOME_RETENTION_SECONDS` sono dichiarazioni di configurazione
+per il futuro collegamento, non impostazioni che attivano il trasporto. Il
+preflight e il coordinatore usano la stessa funzione per il minimo del marcatore:
+TTL massimo del link + `ceil(timeout)` + margine d'orologio condiviso. I valori
+predefiniti restano quelli del confine e della policy esistenti. Il controllo di
+formato del segreto e dei percorsi non prova entropia, integrità completa,
+persistenza del volume, recapito o compatibilità di un provider.
+
+Un valore `SLPS_ACCOUNT_DELIVERY_ADAPTER` non può autoattestare un adapter. Solo
+una capability iniettata programmaticamente nel preflight può provare una
+selezione esplicita del contratto, senza chiamarne `send`. Il normale comando non
+carica adapter da stringhe d'ambiente; le registrazioni aperte restano bloccate
+anche con tutte queste dichiarazioni, perché il collegamento e il recapito reale
+non sono verificati. Con registrazioni chiuse i prerequisiti delivery mancanti
+sono avvisi, così il lavoro su account predisposti può proseguire. Nessuna nuova
+route, connessione, credenziale provider o consegna viene abilitata.
+
 Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
 il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
 espone un token o finge di aver inviato un'email. Un registro locale separato dalla

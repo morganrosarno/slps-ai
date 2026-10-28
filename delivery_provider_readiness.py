@@ -24,6 +24,19 @@ from delivery_boundary import (
 )
 
 
+DELIVERY_CLOCK_MARGIN_SECONDS = 60
+
+
+def required_dispatch_marker_retention_seconds(timeout_seconds: float) -> int:
+    """Shared offline/runtime lower bound for retaining a dispatch marker."""
+    if (type(timeout_seconds) not in {int, float}
+            or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 30):
+        raise DeliveryBoundaryError(
+            "delivery_configuration_invalid", "Configurazione del confine di consegna non valida.",
+        )
+    return MAX_ACTION_TTL_SECONDS + math.ceil(timeout_seconds) + DELIVERY_CLOCK_MARGIN_SECONDS
+
+
 class DurableDeliveryLedger(Protocol):
     @property
     def dispatch_marker_retention_seconds(self) -> int: ...
@@ -110,7 +123,7 @@ class ProviderNeutralDeliveryCoordinator:
             "cancelled_after_dispatch",
         }),
     }
-    CLOCK_MARGIN_SECONDS = 60
+    CLOCK_MARGIN_SECONDS = DELIVERY_CLOCK_MARGIN_SECONDS
 
     def __init__(self, *, config: DeliveryConfig,
                  adapter: SingleAttemptDeliveryTransport,
@@ -128,10 +141,7 @@ class ProviderNeutralDeliveryCoordinator:
             )
         try:
             marker_retention = ledger.dispatch_marker_retention_seconds
-            required_retention = (
-                MAX_ACTION_TTL_SECONDS + math.ceil(config.timeout_seconds)
-                + self.CLOCK_MARGIN_SECONDS
-            )
+            required_retention = required_dispatch_marker_retention_seconds(config.timeout_seconds)
         except Exception:
             marker_retention = None
             required_retention = None

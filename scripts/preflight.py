@@ -7,13 +7,15 @@ AI provider and never prints secret values.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
+import hmac
 import json
 import os
 import re
 import sqlite3
 import stat
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import sys
 
@@ -23,6 +25,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from source_registry import read_registry
 from durable_storage import DurableStorageError, profile_from_mapping
+from delivery_boundary import DEFAULT_DELIVERY_TIMEOUT_SECONDS, DeliveryBoundaryError
+from delivery_provider_readiness import required_dispatch_marker_retention_seconds
+from delivery_reservations import DeliveryReservationError, DeliveryReservationPolicy
 MASTER_SHA256 = "88a1077d86f78ee1102031739a5a1d1fcfb3750f2aa81639af528b7db8da97b7"
 EXPECTED_START = "gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --threads 1 --timeout 120"
 PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -63,12 +68,68 @@ def persistent_path_ok(path: Path, root: Path) -> bool:
         return False
 
 
+
+SQLITE_SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
+
+
+def _sqlite_sidecars(path: Path) -> tuple[Path, ...]:
+    return tuple(path.with_name(path.name + suffix) for suffix in SQLITE_SIDECAR_SUFFIXES)
+
+
+def _sqlite_sidecar_present(path: Path) -> bool:
+    for sidecar in _sqlite_sidecars(path):
+        try:
+            sidecar.lstat()  # Include dangling links without following them.
+        except FileNotFoundError:
+            continue
+        return True
+    return False
+
+
+def _sqlite_file_identity(path: Path) -> tuple[int, ...]:
+    details = path.lstat()
+    if (not stat.S_ISREG(details.st_mode) or stat.S_ISLNK(details.st_mode)
+            or details.st_nlink != 1):
+        raise sqlite3.OperationalError("sqlite_snapshot_unavailable")
+    return (details.st_dev, details.st_ino, details.st_size,
+            details.st_mtime_ns, details.st_ctime_ns)
+
+
+@contextmanager
+def _immutable_sqlite(path: Path):
+    """Read only a quiescent main file, never creating SQLite sidecars.
+
+    immutable=1 ignores a WAL; therefore sidecars cause a closed failure rather
+    than a pass based on an incomplete main-file snapshot. Operators must stop
+    writers and checkpoint through the trusted database owner, not preflight.
+    """
+    before = _sqlite_file_identity(path)
+    if _sqlite_sidecar_present(path):
+        raise sqlite3.OperationalError("sqlite_snapshot_unavailable")
+    connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True, timeout=2)
+    try:
+        yield connection
+    finally:
+        connection.close()
+        if _sqlite_sidecar_present(path) or _sqlite_file_identity(path) != before:
+            raise sqlite3.OperationalError("sqlite_snapshot_changed")
+
+
+def _delivery_paths_disjoint(first: Path, second: Path) -> bool:
+    # Protect the checkpoint's name space too: it must never masquerade as a
+    # database or reserve a sibling which another SQLite file will create.
+    for left in (first, *_sqlite_sidecars(first)):
+        for right in (second, *_sqlite_sidecars(second)):
+            if left == right or left in right.parents or right in left.parents:
+                return False
+    return True
+
+
 def inspect_account_db(path: Path) -> tuple[bool, int]:
     """Read an existing account DB without creating or changing it."""
     if not path.is_file() or path.is_symlink():
         return False, 0
-    connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
-    try:
+    with _immutable_sqlite(path) as connection:
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
@@ -84,11 +145,160 @@ def inspect_account_db(path: Path) -> tuple[bool, int]:
                  AND u.membership_verified=1 AND c.verified=1"""
         ).fetchone()[0]
         return True, int(eligible)
-    finally:
-        connection.close()
 
 
-def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Check]:
+@dataclass(frozen=True)
+class ConfiguredAccountDeliveryAdapter:
+    """Trusted programmatic capability, never constructed from an env string.
+
+    This declaration proves only explicit binding to an injected adapter. No
+    transport method is called and it does not attest real deliverability.
+    """
+    adapter_id: str
+    adapter: object = field(repr=False)
+
+
+def _delivery_file_path(raw: object, root: Path) -> Path | None:
+    if (not isinstance(raw, str) or not raw or raw != raw.strip() or len(raw) > 4096
+            or any(ord(character) < 32 or ord(character) == 127
+                   or 0xD800 <= ord(character) <= 0xDFFF for character in raw)
+            or any(part in {".", ".."} for part in raw.split("/"))):
+        return None
+    # Reject malformed input before Path or any filesystem inspection. Filesystem
+    # encodings may accept surrogateescape values that are not valid Unicode.
+    try:
+        raw.encode("utf-8", "strict")
+        os.fsencode(raw)
+    except UnicodeError:
+        return None
+    path = Path(raw)
+    if not path.is_absolute() or not persistent_path_ok(path, root):
+        return None
+    try:
+        current = Path(path.anchor)
+        for part in path.parts[1:]:
+            current /= part
+            try:
+                details = current.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(details.st_mode):
+                return None
+            if current != path and not stat.S_ISDIR(details.st_mode):
+                return None
+            if current == path and (not stat.S_ISREG(details.st_mode) or details.st_nlink != 1
+                                    or stat.S_IMODE(details.st_mode) & 0o077):
+                return None
+        return path.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _delivery_secret_bytes(raw: object, env: dict[str, str]) -> bytes | None:
+    if not isinstance(raw, str) or not raw.strip() or any(ord(character) < 32 for character in raw):
+        return None
+    try:
+        secret = raw.encode("utf-8")
+    except UnicodeError:
+        return None
+    # A diversity guard catches empty/repeated placeholders, not entropy proof.
+    if not 32 <= len(secret) <= 256 or len(set(secret)) < 8:
+        return None
+    if any(raw == env.get(variable) for variable in (
+            "SLPS_SESSION_SECRET", "SLPS_PILOT_PASSWORD", "SLPS_PRIVATE_GATE_PASSWORD", "OPENAI_API_KEY")):
+        return None
+    return secret
+
+
+def _delivery_secret_matches_db(path: Path, secret: bytes) -> bool:
+    """Read an existing fingerprint without constructing/migrating the store."""
+    with _immutable_sqlite(path) as connection:
+        rows = connection.execute(
+            "SELECT secret_fingerprint FROM delivery_reservation_meta WHERE singleton=1 LIMIT 2"
+        ).fetchall()
+        return bool(len(rows) == 1 and isinstance(rows[0][0], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", rows[0][0])
+                    and hmac.compare_digest(rows[0][0], hashlib.sha256(secret).hexdigest()))
+
+
+def account_delivery_checks(env: dict[str, str], root: Path, *, registration_open: bool,
+                            delivery_adapter: ConfiguredAccountDeliveryAdapter | None = None) -> list[Check]:
+    """Offline prerequisites only; no initialization, provider lookup or send."""
+    level = "blocker" if registration_open else "warning"
+    results = []
+    secret = _delivery_secret_bytes(env.get("SLPS_DELIVERY_RESERVATION_SECRET"), env)
+    results.append(check("account_delivery_secret", secret is not None,
+        "Segreto delivery presente, distinto e con formato adeguato; il valore non viene emesso.",
+        "Serve un segreto delivery stabile, distinto e di 32–256 byte non vuoti; generarlo e conservarlo fuori dal codice.", level=level))
+    database = _delivery_file_path(env.get("SLPS_DELIVERY_DB_PATH"), root)
+    checkpoint = _delivery_file_path(env.get("SLPS_DELIVERY_CHECKPOINT_PATH"), root)
+    for check_id, value, label in (("account_delivery_db_path", database, "database delivery"),
+                                   ("account_delivery_checkpoint_path", checkpoint, "checkpoint delivery")):
+        results.append(check(check_id, value is not None,
+            f"Percorso del {label} esplicito, assoluto e sicuro secondo i controlli locali.",
+            f"Serve un percorso {label} assoluto non temporaneo, esterno al codice, senza symlink/hardlink e con file privato se esistente.", level=level))
+    other_paths = []
+    try:
+        for variable in ("SLPS_ACCOUNT_DB_PATH", "SLPS_RATE_DB_PATH", "SLPS_CASE_DB_PATH", "SLPS_HISTORY_ROOT",
+                         "SLPS_PROMPT_PATH", "SLPS_SOURCES_PATH"):
+            raw = env.get(variable)
+            if isinstance(raw, str) and raw.strip():
+                other_paths.append(Path(raw).resolve(strict=False))
+        pairs = [(database, checkpoint)]
+        pairs.extend((item, other) for item in (database, checkpoint) for other in other_paths)
+        distinct = bool(database and checkpoint) and all(
+            _delivery_paths_disjoint(first, second)
+            for first, second in pairs if first is not None and second is not None
+        )
+    except (OSError, RuntimeError, ValueError):
+        distinct = False
+    results.append(check("account_delivery_paths_distinct", distinct,
+        "Database e checkpoint delivery sono separati fra loro, dagli altri archivi/media e dai nomi SQLite riservati.",
+        "Database e checkpoint delivery devono essere distinti e non sovrapposti ad archivi, media, file protetti o sibling SQLite -journal/-wal/-shm.", level=level))
+    secret_match = False
+    existing_database = bool(database and database.exists())
+    if secret and existing_database:
+        try:
+            secret_match = _delivery_secret_matches_db(database, secret)
+        except (OSError, sqlite3.Error):
+            pass
+    results.append(check("account_delivery_secret_stability", secret_match,
+        "Il segreto configurato corrisponde all’impronta del registro delivery esistente.",
+        "Stabilità non verificata: registro assente/illeggibile, snapshot non quiescente con sidecar SQLite o impronta non corrispondente. Non rigenerare il segreto a ogni riavvio.", level=level))
+    timeout_raw = env.get("SLPS_DELIVERY_TIMEOUT_SECONDS", str(DEFAULT_DELIVERY_TIMEOUT_SECONDS))
+    retention_raw = env.get("SLPS_DELIVERY_OUTCOME_RETENTION_SECONDS", str(DeliveryReservationPolicy().outcome_retention_seconds))
+    retention_ok = False
+    try:
+        if (not isinstance(timeout_raw, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", timeout_raw)
+                or not isinstance(retention_raw, str) or not re.fullmatch(r"[0-9]+", retention_raw)):
+            raise ValueError()
+        required = required_dispatch_marker_retention_seconds(float(timeout_raw))
+        policy = DeliveryReservationPolicy(outcome_retention_seconds=int(retention_raw))
+        retention_ok = policy.outcome_retention_seconds >= required
+    except (ValueError, OverflowError, DeliveryBoundaryError, DeliveryReservationError):
+        pass
+    results.append(check("account_delivery_marker_retention", retention_ok,
+        "Retention del marcatore sufficiente: TTL massimo del link + timeout arrotondato + margine condiviso.",
+        "Retention/timeout delivery non validi o insufficienti per impedire una seconda consegna durante la validità del link.", level=level))
+    configured_id = env.get("SLPS_ACCOUNT_DELIVERY_ADAPTER", "")
+    adapter_ok = False
+    try:
+        adapter_ok = bool(isinstance(configured_id, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", configured_id)
+                          and isinstance(delivery_adapter, ConfiguredAccountDeliveryAdapter)
+                          and configured_id == delivery_adapter.adapter_id
+                          and callable(getattr(delivery_adapter.adapter, "send", None)))
+    except Exception:
+        pass
+    results.append(check("account_delivery_adapter", adapter_ok,
+        "Adapter delivery selezionato e associato esplicitamente a una capability programmatica; nessun invio eseguito.",
+        "Nessun adapter delivery configurato: una stringa o un flag di ambiente non attestano un collegamento reale.", level=level))
+    results.append(Check("account_delivery_provider_verification", level, level,
+        "Controllo offline: montaggio persistente, integrità completa del registro/checkpoint, backup e recapito reale non verificati. La registrazione cliente resta chiusa."))
+    return results
+
+
+def run_checks(env: dict[str, str] | None = None, root: Path = ROOT, *,
+               delivery_adapter: ConfiguredAccountDeliveryAdapter | None = None) -> list[Check]:
     env = dict(os.environ if env is None else env)
     results: list[Check] = []
 
@@ -265,6 +475,8 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
             results.append(Check("account_login_ready", "blocker", "blocker",
                                  "Il collaudo account richiede un archivio valido con almeno un account verificato."))
 
+        results.extend(account_delivery_checks(env, root, registration_open=registration_open,
+                                              delivery_adapter=delivery_adapter))
         if registration_open:
             results.append(Check("account_delivery", "blocker", "blocker",
                                  "Registrazioni aperte senza consegna verificata: email di verifica, recupero password e inviti aziendali non possono essere recapitati. Non aprire lo staging agli utenti."))
