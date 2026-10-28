@@ -24,8 +24,10 @@ come argomento CLI. Il percorso database proviene da `SLPS_ACCOUNT_DB_PATH` o da
 `--db`; una capacità mancante, corta, ambigua o diversa da quella associata al
 database blocca l'operazione.
 
-L'associazione iniziale della capacità e la sua rotazione appartengono a una
-procedura fidata separata e non sono implementate da questa CLI. Prima di
+L'associazione iniziale, la rotazione e il recupero della capacità appartengono
+alla procedura fidata separata descritta in
+[`COMPANY_VERIFICATION_CAPABILITY.md`](COMPANY_VERIFICATION_CAPABILITY.md) e non
+sono implementate da questa CLI. Prima di
 costruire lo store, ogni comando richiede in sola lettura la tabella
 `account_verification_operator_meta`, la riga `singleton=1` e un fingerprint
 valido corrispondente alla capacità fornita. Se tabella o riga mancano, il
