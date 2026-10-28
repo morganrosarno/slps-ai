@@ -240,6 +240,9 @@ class PreflightTests(unittest.TestCase):
                     checks = {item.id: item for item in preflight.run_checks(env, root)}
                 self.assertEqual(checks["account_login_ready"].status, "blocker")
                 self.assertEqual(checks["account_delivery"].status, "blocker")
+                self.assertIn("verifica", checks["account_delivery"].message)
+                self.assertIn("recupero", checks["account_delivery"].message)
+                self.assertIn("inviti", checks["account_delivery"].message)
                 self.assertEqual(checks["account_db_schema"].status, "pass")
             finally:
                 db_path.unlink(missing_ok=True)

@@ -144,8 +144,9 @@ dal volume sorgente. Una prova locale riuscita non sostituisce la prova di
 restart e restore sull'infrastruttura scelta.
 
 La fondazione della registrazione self-service è descritta in `docs/ACCOUNTS_LOCAL.md`.
-È disattivata per default; nel collaudo locale l'invio email e la verifica reale
-dell'azienda non sono collegati. Nessun account in attesa può accedere ad analisi o casi.
+È disattivata per default; nel collaudo locale la consegna di verifiche email,
+recuperi password e inviti aziendali, oltre alla verifica reale dell'azienda,
+non è collegata. Nessun account in attesa può accedere ad analisi o casi.
 Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
 il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
 espone un token o finge di aver inviato un'email. Un registro locale separato dalla

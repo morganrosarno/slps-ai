@@ -267,10 +267,10 @@ def run_checks(env: dict[str, str] | None = None, root: Path = ROOT) -> list[Che
 
         if registration_open:
             results.append(Check("account_delivery", "blocker", "blocker",
-                                 "Le registrazioni sono aperte ma non esiste un canale di consegna per verifica email e recupero password: non aprire lo staging agli utenti."))
+                                 "Registrazioni aperte senza consegna verificata: email di verifica, recupero password e inviti aziendali non possono essere recapitati. Non aprire lo staging agli utenti."))
         else:
             results.append(Check("account_delivery", "warning", "warning",
-                                 "Registrazioni chiuse: il collaudo può usare account predisposti; invio email e recupero self-service restano non disponibili."))
+                                 "Registrazioni chiuse: il collaudo può usare account predisposti; verifica email, recupero password e inviti restano non disponibili senza un trasporto configurato e collaudato."))
         results.append(Check("company_verification", "warning", "warning",
                              "La verifica di azienda e rappresentanza resta un'operazione umana; procedura, evidenze e responsabile vanno definiti prima dell'onboarding reale."))
 

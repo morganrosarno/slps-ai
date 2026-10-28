@@ -43,6 +43,22 @@ test('All new screen labels and error messages have the same four language keys'
   for (const match of html.matchAll(/data-i18n="([^"]+)"/g)) assert.ok(keys.includes(match[1]), match[1]);
 });
 
+test('Account journey states that verification, recovery and invitations have no email delivery', () => {
+  const patterns = {
+    it: [/verific/i, /recuper/i, /invit/i],
+    de: [/Bestät|Prüf/i, /Wiederher/i, /Einlad/i],
+    fr: [/vérific/i, /récup/i, /invit/i],
+    en: [/verif/i, /recover/i, /invit/i]
+  };
+  for (const language of ui.locales) {
+    const copy = ui.dictionaries[language].deliveryNote + ' ' + ui.dictionaries[language].recoveryNote;
+    for (const pattern of patterns[language]) assert.match(copy, pattern, language + ':' + pattern);
+  }
+  const source = html + fs.readFileSync(path.join(__dirname, '../static/account.js'), 'utf8');
+  assert.doesNotMatch(source, /mailto:|\/api\/accounts\/(?:request-reset|invite)/i);
+  assert.doesNotMatch(html, /action=|formaction=/i);
+});
+
 test('Registration screen initial state uses server configuration and reveals no app access', async () => {
   const h = harness([{ data: anonymous }], '/register'); await h.controller.start();
   assert.equal(h.nodes['account-register-form'].hidden, false);

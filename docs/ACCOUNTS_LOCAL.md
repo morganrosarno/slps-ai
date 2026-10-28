@@ -24,11 +24,15 @@ existing account sessions via a stored version. Company/membership verification
 has no public endpoint; local tests simulate a real operator check through
 `verify_company(company_id, representative_user_id)`.
 
-No email delivery adapter exists yet. Registration and reset request responses
+The delivery boundary is provider-neutral and remains deliberately unwired. It
+may prepare verification, password-reset and company-invitation messages only
+after an injected transport is configured and tested; the default path performs
+no network request and sends no email. Registration and reset request responses
 explicitly report `delivery_configured=false`; the reset request response is
 identical for known and unknown email addresses and never claims a mail was sent.
 The current local flow therefore cannot be presented as unattended production
-onboarding or password recovery. Do not expose tokens in logs, URLs or chat.
+onboarding, password recovery or invitation delivery. Do not expose tokens in
+logs, URLs, analytics, browser storage or chat.
 
 Every protected account request reloads the user, verification flags and session
 version from SQLite. Mode changes invalidate the old authentication session.
@@ -68,10 +72,10 @@ necessarie alla revoca delle sessioni, permessi locali e presenza di almeno un
 utente attivo con email, azienda e rappresentanza approvate. Non crea account,
 non migra il database e non stampa percorsi, email o altri dati.
 
-La fondazione attuale non contiene un adattatore di consegna. Per questo
-`SLPS_ACCOUNT_REGISTRATION_OPEN=true` è un blocco di staging: l'interfaccia
-accetterebbe una richiesta, ma non potrebbe consegnare la verifica email o il
-recupero password. Con registrazioni chiuse, un account verificato predisposto
+Il confine di consegna resta intenzionalmente scollegato da un trasporto. Per
+questo `SLPS_ACCOUNT_REGISTRATION_OPEN=true` è un blocco di staging:
+l'interfaccia accetterebbe una richiesta, ma non potrebbe consegnare verifica
+email, recupero password o inviti aziendali. Con registrazioni chiuse, un account verificato predisposto
 in modo fidato consente il collaudo del login; l'assenza di consegna e la
 verifica umana di azienda/rappresentanza restano avvisi espliciti.
 
