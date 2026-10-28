@@ -29,6 +29,9 @@ from storage_contracts import (LocalBlobStore, SQLiteMigration,
                                apply_sqlite_migrations, migration_versions,
                                require_durable_storage)
 from durable_storage import profile_from_mapping
+from account_delivery_runtime import (DEFAULT_DELIVERY_TIMEOUT_SECONDS,
+                                      DEFAULT_DELIVERY_OUTCOME_RETENTION_SECONDS,
+                                      registration_delivery_status)
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -806,6 +809,15 @@ def create_app(test_config=None):
             "SLPS_DELIVERY_CHECKPOINT_PATH",
             str(Path(app.instance_path) / "delivery.checkpoint.json"),
         ),
+        DELIVERY_RESERVATION_SECRET=os.getenv("SLPS_DELIVERY_RESERVATION_SECRET"),
+        DELIVERY_TIMEOUT_SECONDS=os.getenv("SLPS_DELIVERY_TIMEOUT_SECONDS", str(DEFAULT_DELIVERY_TIMEOUT_SECONDS)),
+        DELIVERY_OUTCOME_RETENTION_SECONDS=os.getenv("SLPS_DELIVERY_OUTCOME_RETENTION_SECONDS", str(DEFAULT_DELIVERY_OUTCOME_RETENTION_SECONDS)),
+        ACCOUNT_DELIVERY_ADAPTER=os.getenv("SLPS_ACCOUNT_DELIVERY_ADAPTER", ""),
+        ACCOUNT_DELIVERY_ADAPTER_CAPABILITY=None,
+        ACCOUNT_REGISTRATION_TEST_CAPABILITY=None,
+        PROMPT_PATH=os.getenv("SLPS_PROMPT_PATH"),
+        SOURCES_PATH=os.getenv("SLPS_SOURCES_PATH"),
+        OPENAI_API_KEY=os.getenv("OPENAI_API_KEY"),
         SESSION_COOKIE_SECURE=os.getenv("SLPS_COOKIE_SECURE", "true").lower() != "false",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
@@ -1063,6 +1075,16 @@ def create_app(test_config=None):
             "video_synthetic_analysis_enabled": synthetic_video_ui,
         }
 
+    def registration_availability():
+        if not account_mode() or not auth_configured():
+            return {"registration_open": False, "registration_status": "unavailable"}
+        if app.config.get("ACCOUNT_REGISTRATION_OPEN") is not True:
+            return {"registration_open": False, "registration_status": "closed"}
+        status = registration_delivery_status(app.config, testing=app.testing,
+                                              root=Path(__file__).resolve().parent)
+        return {"registration_open": status in {"ready", "synthetic_test_only"},
+                "registration_status": status}
+
     def session_payload(authenticated, csrf, ready):
         payload = {
             "authenticated": authenticated,
@@ -1072,7 +1094,7 @@ def create_app(test_config=None):
             "analysis_configured": ready,
             "media": media_capabilities(),
             "auth_mode": app.config["AUTH_MODE"],
-            "registration_open": bool(account_mode() and app.config["ACCOUNT_REGISTRATION_OPEN"]),
+            **registration_availability(),
             "delivery_configured": False,
         }
         if authenticated:
@@ -1167,7 +1189,7 @@ def create_app(test_config=None):
     @app.get("/")
     def home():
         return render_template("landing.html", accounts_mode=account_mode(),
-                               registration_open=bool(account_mode() and auth_configured() and app.config["ACCOUNT_REGISTRATION_OPEN"]))
+                               registration_open=registration_availability()["registration_open"])
 
     @app.get("/register")
     @app.get("/account")
@@ -1205,7 +1227,9 @@ def create_app(test_config=None):
     def session_info():
         ready = is_analysis_configured()
         if not auth_configured():
-            return jsonify(authenticated=False, csrf=None, configured=False, auth_configured=False, analysis_configured=ready, media=media_capabilities(), auth_mode=app.config["AUTH_MODE"], registration_open=False)
+            return jsonify(authenticated=False, csrf=None, configured=False, auth_configured=False,
+                           analysis_configured=ready, media=media_capabilities(), auth_mode=app.config["AUTH_MODE"],
+                           delivery_configured=False, **registration_availability())
         validate_session_mode()
         if account_mode():
             current_account()
@@ -1268,8 +1292,12 @@ def create_app(test_config=None):
         failure = account_request()
         if failure:
             return failure
-        if not app.config["ACCOUNT_REGISTRATION_OPEN"]:
+        availability = registration_availability()
+        if availability["registration_status"] == "closed":
             return error("registration_closed", "La registrazione non è ancora aperta.", 503)
+        if not availability["registration_open"]:
+            return error("account_delivery_unavailable", "La registrazione non è disponibile in questo ambiente. Puoi accedere con un account esistente.", 503,
+                         registration_open=False, registration_status="delivery_unavailable", delivery_configured=False)
         if not store.login(attempt_scope("registration"), False):
             return error("registration_rate_limited", "Troppi tentativi. Riprova più tardi.", 429)
         data = request.get_json()

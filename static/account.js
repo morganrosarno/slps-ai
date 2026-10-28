@@ -8,6 +8,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const dictionaries = {
     it: {
+      errorDeliveryUnavailable: 'Le nuove registrazioni non sono disponibili. Nessun account è stato creato. Puoi accedere con un account esistente.',
       pageTitle: 'SLPS AI · Account aziendale', skip: 'Vai al contenuto', language: 'Lingua', pilot: 'Pilota riservato · Svizzera',
       introTitle: 'Il tuo account.\nLa tua azienda.', introCopy: 'Uno spazio riservato per collegare persone, azienda e analisi.',
       stepAccount: 'Crea il tuo account', stepAccountCopy: 'Credenziali personali, accesso riservato.', stepCompany: "Verifica l'azienda", stepCompanyCopy: 'Email e autorizzazione aziendale sono controlli distinti.', stepWorkspace: 'Apri lo spazio di lavoro', stepWorkspaceCopy: 'La prova si abilita soltanto dopo le verifiche.', privateNote: "La registrazione non avvia un'analisi e non invia fotografie.",
@@ -19,6 +20,7 @@
       errorGeneric: "Operazione non riuscita. Riprova; nessuna analisi è stata avviata.", errorNetwork: 'Impossibile raggiungere il servizio. Controlla la connessione e riprova.', errorCredentials: 'Email o password non valide.', errorCsrf: 'Sessione scaduta. Ricarica la pagina e riprova.', errorRate: 'Troppi tentativi. Attendi prima di riprovare.', errorDuplicate: "Non è possibile creare un account con questi dati. Se hai già un account, accedi.", errorInvalid: 'Controlla i dati inseriti e i requisiti della password.', errorClosed: 'Le nuove registrazioni sono chiuse.', errorSession: 'La sessione non è più valida. Accedi di nuovo.', errorConfiguration: "L'accesso non è ancora configurato in questa installazione."
     },
     de: {
+      errorDeliveryUnavailable: 'Neue Registrierungen sind nicht verfügbar. Es wurde kein Konto erstellt. Bestehende Konten können sich anmelden.',
       pageTitle: 'SLPS AI · Unternehmenskonto', skip: 'Zum Inhalt', language: 'Sprache', pilot: 'Geschützter Pilot · Schweiz',
       introTitle: 'Ihr Konto.\nIhr Unternehmen.', introCopy: 'Ein geschützter Bereich für Personen, Unternehmen und Analysen.',
       stepAccount: 'Konto erstellen', stepAccountCopy: 'Persönliche Zugangsdaten, geschützter Zugriff.', stepCompany: 'Unternehmen prüfen', stepCompanyCopy: 'E-Mail und Unternehmensberechtigung werden getrennt geprüft.', stepWorkspace: 'Arbeitsbereich öffnen', stepWorkspaceCopy: 'Der Test wird erst nach den Prüfungen freigeschaltet.', privateNote: 'Die Registrierung startet keine Analyse und sendet keine Fotos.',
@@ -30,6 +32,7 @@
       errorGeneric: 'Vorgang fehlgeschlagen. Versuchen Sie es erneut; keine Analyse wurde gestartet.', errorNetwork: 'Der Dienst ist nicht erreichbar. Prüfen Sie die Verbindung und versuchen Sie es erneut.', errorCredentials: 'E-Mail oder Passwort ungültig.', errorCsrf: 'Sitzung abgelaufen. Laden Sie die Seite neu und versuchen Sie es erneut.', errorRate: 'Zu viele Versuche. Warten Sie, bevor Sie es erneut versuchen.', errorDuplicate: 'Mit diesen Angaben kann kein Konto erstellt werden. Wenn Sie bereits ein Konto haben, melden Sie sich an.', errorInvalid: 'Prüfen Sie die Angaben und die Passwortanforderungen.', errorClosed: 'Neue Registrierungen sind geschlossen.', errorSession: 'Die Sitzung ist nicht mehr gültig. Melden Sie sich erneut an.', errorConfiguration: 'Der Zugang ist in dieser Installation noch nicht eingerichtet.'
     },
     fr: {
+      errorDeliveryUnavailable: 'Les nouvelles inscriptions ne sont pas disponibles. Aucun compte n’a été créé. Vous pouvez utiliser un compte existant.',
       pageTitle: 'SLPS AI · Compte entreprise', skip: 'Aller au contenu', language: 'Langue', pilot: 'Pilote privé · Suisse',
       introTitle: 'Votre compte.\nVotre entreprise.', introCopy: 'Un espace privé reliant personnes, entreprise et analyses.',
       stepAccount: 'Créer votre compte', stepAccountCopy: 'Identifiants personnels, accès privé.', stepCompany: "Vérifier l'entreprise", stepCompanyCopy: "L'email et l'autorisation dans l'entreprise sont vérifiés séparément.", stepWorkspace: "Ouvrir l'espace de travail", stepWorkspaceCopy: "L'essai est activé après les vérifications.", privateNote: "L'inscription ne lance aucune analyse et n'envoie aucune photo.",
@@ -41,6 +44,7 @@
       errorGeneric: "Échec de l'opération. Réessayez ; aucune analyse n'a été lancée.", errorNetwork: 'Service inaccessible. Vérifiez la connexion et réessayez.', errorCredentials: 'Email ou mot de passe incorrect.', errorCsrf: 'Session expirée. Rechargez la page et réessayez.', errorRate: 'Trop de tentatives. Attendez avant de réessayer.', errorDuplicate: "Impossible de créer un compte avec ces informations. Si vous avez déjà un compte, connectez-vous.", errorInvalid: 'Vérifiez les informations et les exigences du mot de passe.', errorClosed: 'Les nouvelles inscriptions sont fermées.', errorSession: "La session n'est plus valide. Connectez-vous à nouveau.", errorConfiguration: "L'accès n'est pas encore configuré sur cette installation."
     },
     en: {
+      errorDeliveryUnavailable: 'New registrations are unavailable. No account was created. You can sign in with an existing account.',
       pageTitle: 'SLPS AI · Company account', skip: 'Skip to content', language: 'Language', pilot: 'Private pilot · Switzerland',
       introTitle: 'Your account.\nYour company.', introCopy: 'A private workspace connecting people, your company and analyses.',
       stepAccount: 'Create your account', stepAccountCopy: 'Personal credentials, private access.', stepCompany: 'Verify the company', stepCompanyCopy: 'Email and company authorisation are separate checks.', stepWorkspace: 'Open the workspace', stepWorkspaceCopy: 'The trial becomes available only after verification.', privateNote: 'Registration does not start an analysis or send photographs.',
@@ -80,6 +84,7 @@
     return Boolean(account && account.eligible_for_analysis === true && account.email_verified === true && account.membership_verified === true && account.company && account.company.verified === true);
   }
   function errorKey(code, status) {
+    if (code === 'account_delivery_unavailable') return 'errorDeliveryUnavailable';
     if (code === 'invalid_csrf') return 'errorCsrf';
     if (['invalid_credentials', 'invalid_login'].includes(code)) return 'errorCredentials';
     if (code === 'authentication_required' || status === 401) return 'errorSession';
@@ -200,7 +205,7 @@
       try { data = await response.json(); }
       catch (_) { const error = new Error('invalid-response'); error.key = 'errorGeneric'; throw error; }
       if (!response.ok) {
-        const error = new Error('request-failed'); error.key = errorKey(data && data.error && data.error.code, response.status); error.status = response.status; throw error;
+        const error = new Error('request-failed'); error.code = data && data.error && data.error.code; error.key = errorKey(error.code, response.status); error.status = response.status; throw error;
       }
       return data;
     }
@@ -270,6 +275,9 @@
       try { await operation(); }
       catch (error) {
         if (error.status === 401) { state.authenticated = false; state.account = null; render(); }
+        if (error.code === 'account_delivery_unavailable') {
+          state.registrationOpen = false; state.view = 'login'; $('register-password').value = ''; render();
+        }
         setNotice(error.key || 'errorGeneric', 'error', true);
       } finally { state.busy = false; state.loading = false; render(); }
     }

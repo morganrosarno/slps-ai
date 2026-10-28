@@ -43,6 +43,7 @@ def main():
         socket.create_connection = forbid_outbound
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         import server
+        from account_delivery_runtime import synthetic_registration_capability
 
         def synthetic_analysis(image, _mime, _context):
             return {
@@ -68,6 +69,7 @@ def main():
             "TESTING": True, "AUTH_MODE": "accounts", "DATA_MODE": "synthetic",
             "SECRET_KEY": os.urandom(32), "SESSION_COOKIE_SECURE": False,
             "ACCOUNT_REGISTRATION_OPEN": True, "BILLING_SANDBOX_ENABLED": True,
+            "ACCOUNT_REGISTRATION_TEST_CAPABILITY": synthetic_registration_capability(),
             "ANALYSES_PER_HOUR": 100,
         })
         accounts = app.extensions["account_store"]

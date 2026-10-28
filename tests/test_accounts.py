@@ -8,6 +8,7 @@ from PIL import Image
 import pytest
 
 from accounts import AccountConflict, AccountStore, ConsultationConflict
+from account_delivery_runtime import synthetic_registration_capability
 import server
 
 PASSWORD = "a-long-local-test-passphrase"
@@ -19,6 +20,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "analizza_immagine", lambda *_: {"summary": "Synthetic account test", "findings": []})
     return server.create_app({
         "TESTING": True, "AUTH_MODE": "accounts", "ACCOUNT_REGISTRATION_OPEN": True,
+        "ACCOUNT_REGISTRATION_TEST_CAPABILITY": synthetic_registration_capability(),
         "SECRET_KEY": "a-session-secret-longer-than-32-characters", "PILOT_PASSWORD": None,
         "SESSION_COOKIE_SECURE": False, "ACCOUNT_DB_PATH": str(tmp_path / "accounts.db"),
         "RATE_DB_PATH": str(tmp_path / "limits.db"), "CASE_DB_PATH": str(tmp_path / "cases.db"),

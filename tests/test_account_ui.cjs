@@ -84,6 +84,29 @@ test('Closed registrations cannot be submitted even when invoked directly', asyn
   assert.equal(h.requests.length, 1);
 });
 
+test('A stale registration closes on delivery interlock failure in every language without retry', async () => {
+  for (const language of ui.locales) {
+    const h = harness([{ data: anonymous }, { status: 503, data: { error: {
+      code: 'account_delivery_unavailable', message: 'PRIVATE PROVIDER PATH OR SECRET'
+    }, registration_open: false } }], '/register');
+    await h.controller.start(); h.controller.setLanguage(language);
+    h.nodes['register-password'].value = 'synthetic-password-only';
+    await h.controller.register({ preventDefault() {} });
+    assert.equal(h.controller.state.registrationOpen, false);
+    assert.equal(h.controller.state.view, 'login');
+    assert.equal(h.nodes['account-register-form'].hidden, true);
+    assert.equal(h.nodes['show-register'].hidden, true);
+    assert.equal(h.nodes['account-login-form'].hidden, false);
+    assert.equal(h.nodes['register-password'].value, '');
+    assert.equal(h.nodes['account-notice'].textContent, ui.dictionaries[language].errorDeliveryUnavailable);
+    assert.equal(h.nodes['account-notice'].focused, true);
+    assert.equal(h.controller.state.busy, false);
+    assert.equal(h.requests.length, 2);
+    await h.controller.register({ preventDefault() {} });
+    assert.equal(h.requests.length, 2);
+  }
+});
+
 test('Missing authentication configuration or CSRF disables account mutations', async () => {
   const h = harness([{ data: { ...anonymous, csrf: null, auth_configured: false } }], '/register'); await h.controller.start();
   assert.equal(h.nodes['register-submit'].disabled, true); assert.equal(h.nodes['login-submit'].disabled, true);

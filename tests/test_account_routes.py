@@ -2,6 +2,7 @@
 import pytest
 
 import server
+from account_delivery_runtime import synthetic_registration_capability
 
 
 @pytest.fixture
@@ -10,6 +11,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'analizza_immagine', lambda *_: pytest.fail('Navigation called the provider'))
     return server.create_app({
         'TESTING': True, 'AUTH_MODE': 'accounts', 'ACCOUNT_REGISTRATION_OPEN': True,
+        'ACCOUNT_REGISTRATION_TEST_CAPABILITY': synthetic_registration_capability(),
         'SECRET_KEY': 'synthetic-route-session-secret-32-characters',
         'SESSION_COOKIE_SECURE': False, 'PILOT_PASSWORD': None,
         'ACCOUNT_DB_PATH': str(tmp_path / 'accounts.db'),

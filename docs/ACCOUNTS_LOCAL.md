@@ -4,8 +4,33 @@ The default `SLPS_AUTH_MODE=pilot` preserves existing pilot access. Opting into
 `accounts` requires a strong session secret and a private persistent account DB;
 it does not require the pilot password. Account mode always uses a single
 company trial, even if legacy `SLPS_PILOT_PLAN=internal` or trial-total settings
-are present. Registration remains closed unless explicitly enabled with
-`SLPS_ACCOUNT_REGISTRATION_OPEN=true`. No public deployment is implied.
+are present. `SLPS_ACCOUNT_REGISTRATION_OPEN=true` now expresses intent only.
+Landing, session API and registration POST share a runtime delivery interlock:
+registration stays unavailable until every shared delivery preflight check
+passes, including provider verification. That verification is not implemented
+yet, so the normal runtime stays closed even with the flag set. A blocked POST
+returns `account_delivery_unavailable` before account/token creation, delivery
+or registration-rate mutations. Existing-account login remains available.
+No public deployment is implied.
+
+The session exposes effective `registration_open` and a fixed
+`registration_status`: `closed`, `unavailable`, `delivery_unavailable`, or
+`synthetic_test_only` for explicit fixtures. It never reveals provider details,
+paths, secrets or individual preflight failures. `delivery_configured` remains
+false. This interlock reads existing delivery state without initializing or
+migrating a ledger from a request and invokes no transport.
+An already-open registration form closes immediately on the interlock error,
+clears its password and displays a focused message in IT/DE/FR/EN. It offers
+existing-account login without automatically resubmitting or refreshing.
+
+Disposable synthetic fixtures may inject the opaque object returned by
+`account_delivery_runtime.synthetic_registration_capability()` through the
+in-process `ACCOUNT_REGISTRATION_TEST_CAPABILITY` configuration. It is accepted
+only when `app.testing is True` and `DATA_MODE` is exactly `synthetic`. Strings,
+booleans, mappings, environment/HTTP values and arbitrary objects cannot replace
+it. This explicit fixture bypass does not attest production readiness, send a
+message, expose a token, verify a company or enable real-data mode. Removing it
+or changing either required mode closes registration on the next request.
 
 Registration stores company name, optional identifier, representative role,
 email, language (`it`, `de`, `fr`, `en`) and a password hash. Email confirmation,

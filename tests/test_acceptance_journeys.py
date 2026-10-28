@@ -14,6 +14,7 @@ import pytest
 
 import server
 import slps_ai
+from account_delivery_runtime import synthetic_registration_capability
 
 
 PASSWORD = "synthetic-acceptance-password-only"
@@ -43,6 +44,7 @@ def environment(tmp_path, monkeypatch):
     config = {
         "TESTING": True, "DATA_MODE": "synthetic", "AUTH_MODE": "accounts",
         "ACCOUNT_REGISTRATION_OPEN": True, "BILLING_SANDBOX_ENABLED": True,
+        "ACCOUNT_REGISTRATION_TEST_CAPABILITY": synthetic_registration_capability(),
         "SECRET_KEY": "synthetic-acceptance-session-secret-over-32-characters",
         "SESSION_COOKIE_SECURE": False,
         "ACCOUNT_DB_PATH": str(tmp_path / "accounts.sqlite3"),
