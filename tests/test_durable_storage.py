@@ -10,6 +10,7 @@ from accounts import AccountStore
 from durable_storage import (
     DurableStorageError, create_snapshot, profile_from_mapping, restore_snapshot,
 )
+from delivery_reservations import DeliveryReservationPolicy, SQLiteDeliveryReservationStore
 from server import CaseStore, LimitStore, create_app
 import durable_storage
 from scripts import preflight
@@ -17,6 +18,8 @@ from scripts import preflight
 
 PASSWORD = "a-long-local-test-passphrase"
 VERIFICATION_SECRET = b"synthetic-operator-secret-32-bytes!"
+DELIVERY_SECRET = b"synthetic-delivery-secret-32bytes!"
+DELIVERY_KEY = "delivery:snapshot:" + "k" * 40
 
 
 def profile_values(root: Path) -> dict[str, str]:
@@ -27,6 +30,8 @@ def profile_values(root: Path) -> dict[str, str]:
         "SLPS_ACCOUNT_DB_PATH": str(root / "db" / "accounts-billing.sqlite3"),
         "SLPS_RATE_DB_PATH": str(root / "db" / "limits.sqlite3"),
         "SLPS_CASE_DB_PATH": str(root / "db" / "cases.sqlite3"),
+        "SLPS_DELIVERY_DB_PATH": str(root / "db" / "delivery.sqlite3"),
+        "SLPS_DELIVERY_CHECKPOINT_PATH": str(root / "state" / "delivery.checkpoint.json"),
         "SLPS_HISTORY_ROOT": str(root / "media"),
     }
 
@@ -44,6 +49,8 @@ def app_config(root: Path, *, mode="real") -> dict:
         "ACCOUNT_DB_PATH": env["SLPS_ACCOUNT_DB_PATH"],
         "RATE_DB_PATH": env["SLPS_RATE_DB_PATH"],
         "CASE_DB_PATH": env["SLPS_CASE_DB_PATH"],
+        "DELIVERY_DB_PATH": env["SLPS_DELIVERY_DB_PATH"],
+        "DELIVERY_CHECKPOINT_PATH": env["SLPS_DELIVERY_CHECKPOINT_PATH"],
         "HISTORY_ROOT": env["SLPS_HISTORY_ROOT"],
     }
 
@@ -72,6 +79,18 @@ def populated_profile(tmp_path: Path):
                  "media_type": "image/jpeg", "data": b"synthetic-image"}],
     )
     assert error is None
+    delivery = SQLiteDeliveryReservationStore(
+        profile.delivery_db, checkpoint_path=profile.delivery_checkpoint,
+        key_secret=DELIVERY_SECRET,
+        policy=DeliveryReservationPolicy(
+            reservation_retention_seconds=600, outcome_retention_seconds=3_600,
+        ), clock=lambda: 1_000.0,
+    )
+    assert delivery.reserve_once(DELIVERY_KEY)
+    delivery.record_outcome(
+        DELIVERY_KEY, status="accepted", code="transport_accepted",
+        reconciliation_key="delivery-snapshot:" + "r" * 40,
+    )
     return profile, user, case_id
 
 
@@ -196,7 +215,10 @@ def test_full_snapshot_restore_preserves_migrations_media_and_tenant_isolation(t
     backup = tmp_path / "backup"
     manifest = create_snapshot(profile, backup, quiesced=True)
     assert {item["name"] for item in manifest["files"] if item["kind"] == "sqlite"} == {
-        "accounts_billing", "limits", "cases"
+        "accounts_billing", "limits", "cases", "delivery"
+    }
+    assert {item["name"] for item in manifest["files"] if item["kind"] == "state"} == {
+        "delivery_checkpoint"
     }
     media = [item for item in manifest["files"] if item["kind"] == "media"]
     assert media and all(item["sha256"] and item["size"] > 0 for item in media)
@@ -222,6 +244,14 @@ def test_full_snapshot_restore_preserves_migrations_media_and_tenant_isolation(t
     assert cases.get(case_id, "tenant-b", "owner-a") is None
     asset = cases.get(case_id, "tenant-a", "owner-a")["assets"][0]
     assert cases.asset(case_id, asset["id"], "tenant-a", "owner-a")["path"].read_bytes() == b"synthetic-image"
+    delivery = SQLiteDeliveryReservationStore(
+        restored.delivery_db, checkpoint_path=restored.delivery_checkpoint,
+        key_secret=DELIVERY_SECRET,
+        policy=DeliveryReservationPolicy(
+            reservation_retention_seconds=600, outcome_retention_seconds=3_600,
+        ), clock=lambda: 1_000.0,
+    )
+    assert delivery.outcome_status(DELIVERY_KEY)["outcome"]["status"] == "accepted"
 
 
 def test_restore_rejects_checksum_tampering_without_touching_empty_target(tmp_path):

@@ -20,7 +20,8 @@ from typing import Mapping
 PROFILE_NAME = "single-instance"
 MANIFEST_FORMAT = 1
 DEFAULT_MIN_FREE_BYTES = 1024 * 1024 * 1024
-DB_KEYS = ("accounts_billing", "limits", "cases")
+DB_KEYS = ("accounts_billing", "limits", "cases", "delivery")
+STATE_KEYS = ("delivery_checkpoint",)
 
 
 class DurableStorageError(RuntimeError):
@@ -72,6 +73,8 @@ class SingleInstanceProfile:
     account_db: Path
     rate_db: Path
     case_db: Path
+    delivery_db: Path
+    delivery_checkpoint: Path
     media_root: Path
     min_free_bytes: int = DEFAULT_MIN_FREE_BYTES
     configured: bool = True
@@ -80,7 +83,11 @@ class SingleInstanceProfile:
     @property
     def databases(self) -> dict[str, Path]:
         return {"accounts_billing": self.account_db, "limits": self.rate_db,
-                "cases": self.case_db}
+                "cases": self.case_db, "delivery": self.delivery_db}
+
+    @property
+    def state_files(self) -> dict[str, Path]:
+        return {"delivery_checkpoint": self.delivery_checkpoint}
 
     def relative(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
@@ -109,13 +116,23 @@ def profile_from_mapping(values: Mapping[str, object], *, env_names: bool = True
     account = _confined(get("SLPS_ACCOUNT_DB_PATH", "ACCOUNT_DB_PATH"), root, "account_db")
     rate = _confined(get("SLPS_RATE_DB_PATH", "RATE_DB_PATH"), root, "rate_db")
     cases = _confined(get("SLPS_CASE_DB_PATH", "CASE_DB_PATH"), root, "case_db")
+    delivery = _confined(get("SLPS_DELIVERY_DB_PATH", "DELIVERY_DB_PATH"), root,
+                         "delivery_db")
+    checkpoint = _confined(
+        get("SLPS_DELIVERY_CHECKPOINT_PATH", "DELIVERY_CHECKPOINT_PATH"), root,
+        "delivery_checkpoint",
+    )
     media = _confined(get("SLPS_HISTORY_ROOT", "HISTORY_ROOT"), root, "history_root", directory=True)
-    databases = (account, rate, cases)
-    if len(set(databases)) != len(databases):
+    private_files = (account, rate, cases, delivery, checkpoint)
+    if (len(set(private_files)) != len(private_files)
+            or any(first in second.parents or second in first.parents
+                   for index, first in enumerate(private_files)
+                   for second in private_files[index + 1:])):
         raise DurableStorageError("durable_database_paths_overlap")
-    if any(media == db or media in db.parents or db in media.parents for db in databases):
+    if any(media == item or media in item.parents or item in media.parents
+           for item in private_files):
         raise DurableStorageError("durable_media_database_paths_overlap")
-    profile = SingleInstanceProfile(root, account, rate, cases, media,
+    profile = SingleInstanceProfile(root, account, rate, cases, delivery, checkpoint, media,
                                     _min_free(get("SLPS_DURABLE_MIN_FREE_BYTES",
                                                   "DURABLE_MIN_FREE_BYTES")))
     profile.ensure_capacity()
@@ -193,11 +210,20 @@ def create_snapshot(profile: SingleInstanceProfile, destination: str | Path, *, 
         layout = {"account_db": profile.relative(profile.account_db),
                   "rate_db": profile.relative(profile.rate_db),
                   "case_db": profile.relative(profile.case_db),
+                  "delivery_db": profile.relative(profile.delivery_db),
+                  "delivery_checkpoint": profile.relative(profile.delivery_checkpoint),
                   "media_root": profile.relative(profile.media_root)}
         for name, source in profile.databases.items():
             archive = f"databases/{name}.sqlite3"
             digest, size = _sqlite_snapshot(source, temp / archive)
             files.append({"kind": "sqlite", "name": name, "path": archive,
+                          "sha256": digest, "size": size})
+        for name, source in profile.state_files.items():
+            if not source.is_file() or source.is_symlink() or _has_symlink(source):
+                raise DurableStorageError("snapshot_state_missing_or_unsafe")
+            archive = f"state/{name}.json"
+            digest, size = _copy_checked(source, temp / archive)
+            files.append({"kind": "state", "name": name, "path": archive,
                           "sha256": digest, "size": size})
         if (not profile.media_root.is_dir() or profile.media_root.is_symlink()
                 or _has_symlink(profile.media_root)):
@@ -246,7 +272,7 @@ def _verified_manifest(backup: Path) -> tuple[dict, list[dict]]:
             raise DurableStorageError("invalid_snapshot_manifest")
         relative = _safe_relative(item.get("path")); key = relative.as_posix()
         digest, size = item.get("sha256"), item.get("size")
-        if (key in declared or item.get("kind") not in {"sqlite", "media"}
+        if (key in declared or item.get("kind") not in {"sqlite", "media", "state"}
                 or not isinstance(size, int) or size < 0
                 or not isinstance(digest, str) or len(digest) != 64):
             raise DurableStorageError("invalid_snapshot_manifest")
@@ -267,16 +293,26 @@ def _verified_manifest(backup: Path) -> tuple[dict, list[dict]]:
     names = [item.get("name") for item in entries if item["kind"] == "sqlite"]
     if sorted(names) != sorted(DB_KEYS):
         raise DurableStorageError("snapshot_database_inventory_incomplete")
-    for key in ("account_db", "rate_db", "case_db", "media_root"):
+    state_names = [item.get("name") for item in entries if item["kind"] == "state"]
+    if sorted(state_names) != sorted(STATE_KEYS):
+        raise DurableStorageError("snapshot_state_inventory_incomplete")
+    for key in ("account_db", "rate_db", "case_db", "delivery_db",
+                "delivery_checkpoint", "media_root"):
         _safe_relative(manifest["layout"].get(key))
     layout = {key: _safe_relative(manifest["layout"].get(key)) for key in (
-        "account_db", "rate_db", "case_db", "media_root"
+        "account_db", "rate_db", "case_db", "delivery_db", "delivery_checkpoint",
+        "media_root"
     )}
-    database_layout = (layout["account_db"], layout["rate_db"], layout["case_db"])
-    if len(set(database_layout)) != len(database_layout):
+    private_layout = (layout["account_db"], layout["rate_db"], layout["case_db"],
+                      layout["delivery_db"], layout["delivery_checkpoint"])
+    if (len(set(private_layout)) != len(private_layout)
+            or any(first in second.parents or second in first.parents
+                   for index, first in enumerate(private_layout)
+                   for second in private_layout[index + 1:])):
         raise DurableStorageError("snapshot_layout_overlap")
     media = layout["media_root"]
-    if any(media == db or media in db.parents or db in media.parents for db in database_layout):
+    if any(media == item or media in item.parents or item in media.parents
+           for item in private_layout):
         raise DurableStorageError("snapshot_layout_overlap")
     return manifest, entries
 
@@ -310,7 +346,7 @@ def restore_snapshot(backup: str | Path, target_root: str | Path,
         paths = {key: temp.joinpath(*_safe_relative(value).parts)
                  for key, value in layout.items()}
         db_targets = {"accounts_billing": paths["account_db"], "limits": paths["rate_db"],
-                      "cases": paths["case_db"]}
+                      "cases": paths["case_db"], "delivery": paths["delivery_db"]}
         for item in entries:
             if item["kind"] != "sqlite":
                 continue
@@ -320,6 +356,12 @@ def restore_snapshot(backup: str | Path, target_root: str | Path,
             with sqlite3.connect(destination) as db:
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise DurableStorageError("restored_database_integrity_failed")
+        for item in entries:
+            if item["kind"] != "state":
+                continue
+            destination = paths[item["name"]]
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(backup / item["path"], destination); destination.chmod(0o600)
         paths["media_root"].mkdir(parents=True, exist_ok=True, mode=0o700)
         for item in entries:
             if item["kind"] != "media":
@@ -338,6 +380,8 @@ def restore_snapshot(backup: str | Path, target_root: str | Path,
             target.joinpath(*_safe_relative(layout["account_db"]).parts),
             target.joinpath(*_safe_relative(layout["rate_db"]).parts),
             target.joinpath(*_safe_relative(layout["case_db"]).parts),
+            target.joinpath(*_safe_relative(layout["delivery_db"]).parts),
+            target.joinpath(*_safe_relative(layout["delivery_checkpoint"]).parts),
             target.joinpath(*_safe_relative(layout["media_root"]).parts), reserve)
         profile.ensure_capacity()
         return profile

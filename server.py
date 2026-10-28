@@ -799,6 +799,13 @@ def create_app(test_config=None):
         BILLING_SANDBOX_ENABLED=os.getenv("SLPS_BILLING_SANDBOX_ENABLED", "false").lower() == "true",
         BILLING_SANDBOX_MAX_OPEN_INTENTS=int(os.getenv("SLPS_BILLING_SANDBOX_MAX_OPEN_INTENTS", "5")),
         ACCOUNT_DB_PATH=os.getenv("SLPS_ACCOUNT_DB_PATH", str(Path(app.instance_path) / "accounts.sqlite3")),
+        DELIVERY_DB_PATH=os.getenv(
+            "SLPS_DELIVERY_DB_PATH", str(Path(app.instance_path) / "delivery.sqlite3")
+        ),
+        DELIVERY_CHECKPOINT_PATH=os.getenv(
+            "SLPS_DELIVERY_CHECKPOINT_PATH",
+            str(Path(app.instance_path) / "delivery.checkpoint.json"),
+        ),
         SESSION_COOKIE_SECURE=os.getenv("SLPS_COOKIE_SECURE", "true").lower() != "false",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",

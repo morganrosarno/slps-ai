@@ -8,8 +8,9 @@ essere usato come prova di persistenza produttiva.
 Il servizio dichiara questa separazione con `SLPS_DATA_MODE`: `synthetic` è il
 default e conserva il comportamento del pilota. `real` richiede il profilo
 `SLPS_DURABLE_PROFILE=single-instance`, una radice montata già esistente e una
-riserva minima di capacità. Account e billing condividono un SQLite; limiti e
-casi usano due SQLite distinti; i media hanno una cartella distinta. Ogni
+riserva minima di capacità. Account e billing condividono un SQLite; limiti,
+casi e registro delivery usano SQLite distinti; il checkpoint autenticato del
+registro delivery è un file separato e i media hanno una cartella distinta. Ogni
 percorso deve essere assoluto, sotto la radice risolta, senza symlink e senza
 sovrapposizioni. Una configurazione incompleta si arresta prima di creare file.
 Anche una configurazione completa non abilita oggi `real`: manca ancora
@@ -30,7 +31,7 @@ accettazione prima dell'uso commerciale.
    --confirm-quiesced`. La destinazione deve essere nuova e fuori dalla radice
    sorgente.
 3. Conservare la directory completa. Il manifest include layout relativo,
-   dimensione e SHA-256 di ogni SQLite e media. Ogni SQLite è copiato tramite
+   dimensione e SHA-256 di ogni SQLite, checkpoint e media. Ogni SQLite è copiato tramite
    la sua API di backup e sottoposto a `PRAGMA integrity_check`.
 4. Provare `python scripts/durable_snapshot.py restore /backup/assoluto
    /radice/vuota`. Il restore rifiuta file inattesi, checksum alterati, symlink,
@@ -38,12 +39,16 @@ accettazione prima dell'uso commerciale.
    vuote; prepara tutto in una directory privata e la rinomina solo a verifica
    completa.
 5. Avviare una copia isolata sulla radice ripristinata e verificare login,
-   contatori, casi, media e isolamento aziendale. Registrare la prova di restart
+   contatori, casi, media, registro delivery con checkpoint e isolamento aziendale. Registrare la prova di restart
    e restore del provider separatamente: il repository non la dichiara.
 
 Le impronte SHA-256 rilevano corruzioni o differenze rispetto al manifesto. Non
 autenticano il backup contro chi può modificare sia i file sia il manifesto;
 la custodia e il controllo accessi del backup restano responsabilità operativa.
+Il checkpoint delivery rileva rollback o troncamento del solo SQLite, ma non un
+rollback coordinato dell'intero volume che ripristini insieme database e
+checkpoint compatibili. Un controllo monotono esterno resta necessario per
+coprire quel modello di minaccia.
 
 ## Contratti e migrazioni locali
 

@@ -37,7 +37,9 @@ def run():
         database = Path(directory) / "delivery.sqlite3"
         reservations = SQLiteDeliveryReservationStore(
             database, key_secret=b"offline-conformance-secret-32bytes!",
-            policy=DeliveryReservationPolicy(retention_seconds=600), clock=lambda: 1_000,
+            policy=DeliveryReservationPolicy(
+                reservation_retention_seconds=600, outcome_retention_seconds=3_600,
+            ), clock=lambda: 1_000,
         )
         boundary = AccountDeliveryBoundary(
             config=DeliveryConfig(("accounts.slps.example",)), transport=transport,
@@ -45,19 +47,31 @@ def run():
         )
         with patch.object(socket, "socket", blocked), patch.object(socket, "create_connection", blocked):
             for index, purpose in enumerate(("verify_email", "reset_password", "company_invitation")):
+                key = f"delivery:{purpose}:{'i' * 40}"
                 result = boundary.dispatch(
                     recipient=f"synthetic-{index}@example.test", purpose=purpose, locale="it",
                     action_url=(f"https://accounts.slps.example{dict(DEFAULT_ACTION_PATHS)[purpose]}"
                                 f"?token={'x' * 32}"),
                     expires_at_utc=(now + timedelta(hours=1)).isoformat(),
-                    idempotency_key=f"delivery:{purpose}:{'i' * 40}",
+                    idempotency_key=key,
                 )
                 assert result == {"status": "accepted", "purpose": purpose}
+                outcome = reservations.record_outcome(
+                    key, status="accepted", code="transport_accepted",
+                    reconciliation_key=f"delivery-outcome:{purpose}:{'r' * 32}",
+                    provider_reference=f"synthetic-recorded-{index}",
+                )
+                assert outcome["status"] == "accepted" and outcome["chain_valid"]
         restarted = SQLiteDeliveryReservationStore(
             database, key_secret=b"offline-conformance-secret-32bytes!",
-            policy=DeliveryReservationPolicy(retention_seconds=600), clock=lambda: 1_000,
+            policy=DeliveryReservationPolicy(
+                reservation_retention_seconds=600, outcome_retention_seconds=3_600,
+            ), clock=lambda: 1_000,
         )
         assert restarted.reserve_once(f"delivery:verify_email:{'i' * 40}") is False
+        assert restarted.outcome_status(
+            f"delivery:verify_email:{'i' * 40}",
+        )["outcome"]["status"] == "accepted"
     assert len(transport.envelopes) == 3 and not network_attempts
     assert all(item.attempts_allowed == 1 and not item.allow_redirects and item.verify_tls
                for item in transport.envelopes)
@@ -65,6 +79,7 @@ def run():
         "offline_conformance": "passed", "purposes": 3, "single_attempts": 3,
         "network_attempts": 0, "provider_sdk": False, "real_messages_sent": 0,
         "application_wired": False, "durable_restart_duplicate_suppressed": True,
+        "durable_outcomes_verified": 3,
     }, sort_keys=True))
 
 

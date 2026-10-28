@@ -61,8 +61,47 @@ never the raw key, and refuses to open the database if the injected secret does
 not match its stored fingerprint. The default retention is seven days and the
 default active-reservation cap is 50,000. At capacity it removes expired rows
 only, then fails closed; it never evicts an active reservation to permit another
-attempt. An expired key can be reserved again. This ledger does not mean that a
-message was delivered and is not wired into `server.py`.
+attempt. An expired key can be reserved again. This reservation alone does not
+mean that a message was delivered and is not wired into `server.py`.
+
+The same private SQLite store can append a delivery outcome after a future
+single transport attempt. Outcomes are limited to `accepted`, `failed` and
+`uncertain`, each with a small allowlist of machine codes. An uncertain outcome
+may be reconciled once to accepted or failed; a final outcome cannot change.
+Every reconciliation is idempotent and linked to the existing reservation by
+its HMAC digest. Provider references and reconciliation keys are HMACed; raw
+values, recipients, action URLs and tokens are not stored or returned. A chained
+HMAC plus the reservation head makes missing, changed or reordered events fail
+closed. Reservation retention and outcome retention are separate policy values.
+An expired reservation with a retained outcome cannot be reopened; an uncertain
+outcome can still be reconciled to a final result during its outcome-retention
+window. Retained outcomes count against the bounded reservation capacity. A
+cleanup removes the row only after both the reservation and outcome windows
+have elapsed, so a shorter outcome policy can never shorten idempotency; only
+then can the same key be reserved again deterministically.
+
+The SQLite state is anchored to a separate authenticated checkpoint file. Every
+store operation verifies the canonical ledger digest in SQLite and the sidecar
+before reading or changing data. This detects SQL-only coherent truncation and
+replacement of the database with an older copy while the current checkpoint
+remains. Checkpoint replacement is atomic and fail-closed; a crash between the
+two filesystem commits can require restoring the last complete snapshot. There
+is no external monotonic anchor in this local profile: an actor able to roll back
+both files, or the entire volume, to the same older snapshot cannot be detected
+here. That case requires infrastructure-controlled versioning or a trusted
+external anchor. This proves only local ledger consistency, not that a recipient
+read a message or that a provider delivered it.
+
+`scripts/delivery_outcome_operator.py` is a protected offline interface for a
+future trusted delivery adapter. The secret and request JSON are accepted from
+bounded file descriptors (or the secret from a protected environment setting),
+while stdout contains only status, allowlisted code, timestamps and Boolean
+metadata. The command refuses to create a missing database or checkpoint and
+contains no transport or network client. Both files are mandatory members of
+the `single-instance` durable-storage inventory. A quiesced snapshot includes
+both; restore tests reopen the pair and verify the outcome chain before use.
+`SLPS_DELIVERY_DB_PATH` and `SLPS_DELIVERY_CHECKPOINT_PATH` must be distinct
+paths below the durable root.
 
 Every protected account request reloads the user, verification flags and session
 version from SQLite. Mode changes invalidate the old authentication session.
