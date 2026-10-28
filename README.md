@@ -199,6 +199,13 @@ non sono verificati. Con registrazioni chiuse i prerequisiti delivery mancanti
 sono avvisi, così il lavoro su account predisposti può proseguire. Nessuna nuova
 route, connessione, credenziale provider o consegna viene abilitata.
 
+Il [rehearsal delivery offline](docs/DELIVERY_ACTIVATION_REHEARSAL.md), eseguibile
+con `python scripts/delivery_activation_rehearsal.py`, crea e rimuove soltanto
+un registro/checkpoint sintetici isolati. Riusa il preflight e una capability
+finta senza invii per verificare tutti i prerequisiti locali, il blocco provider
+anche nella baseline valida e sette casi di errore. Il JSON è depurato e non
+autorizza l'apertura delle registrazioni o un collegamento al provider reale.
+
 Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
 il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
 espone un token o finge di aver inviato un'email. Un registro locale separato dalla
