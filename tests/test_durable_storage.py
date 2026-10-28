@@ -187,7 +187,7 @@ def test_full_snapshot_restore_preserves_migrations_media_and_tenant_isolation(t
     restored = restore_snapshot(backup, empty_target, min_free_bytes=1)
     accounts = AccountStore(restored.account_db)
     assert accounts.authenticate("owner@example.test", PASSWORD)["id"] == user["id"]
-    assert accounts.schema_versions() == (1, 2, 3)
+    assert accounts.schema_versions() == (1, 2, 3, 4)
     limits = LimitStore(restored.rate_db)
     assert limits.schema_versions() == (1, 2, 3, 4)
     with limits.connect() as db:

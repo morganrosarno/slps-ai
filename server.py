@@ -860,7 +860,10 @@ def create_app(test_config=None):
     )
     app.extensions["limit_store"] = store
     app.extensions["case_store"] = case_store
-    accounts = (AccountStore(app.config["ACCOUNT_DB_PATH"])
+    accounts = (AccountStore(
+                    app.config["ACCOUNT_DB_PATH"],
+                    allow_test_verification=app.testing is True,
+                )
                 if app.config["AUTH_MODE"] == "accounts" else None)
     app.extensions["durable_storage_profile"] = durable_profile
     app.extensions["account_store"] = accounts

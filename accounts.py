@@ -6,6 +6,7 @@ operator/delivery-adapter primitive, never a token-disclosing HTTP endpoint.
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
@@ -67,6 +68,22 @@ class ConsultationConflict(ValueError):
 
 class BillingSandboxConflict(ValueError):
     """A non-transactional checkout simulation cannot be created or changed."""
+
+
+class VerificationReviewConflict(ValueError):
+    """A company or membership review cannot be transitioned safely."""
+
+
+class VerificationAuthorizationError(PermissionError):
+    """The trusted operator review capability is missing or invalid."""
+
+
+VERIFICATION_REVIEW_KINDS = {"company_representative", "membership"}
+VERIFICATION_APPROVAL_CODES = {"identity_and_authority_confirmed", "membership_confirmed"}
+VERIFICATION_REJECTION_CODES = {
+    "company_identity_unverified", "representative_authority_unverified",
+    "membership_unverified", "conflicting_company_record", "insufficient_evidence",
+}
 
 
 BILLING_CATALOG_REVISION = "draft-2026-10-26-v1"
@@ -212,23 +229,168 @@ def _migrate_billing_expiry_v1(db):
         db.execute("ALTER TABLE billing_checkout_intents ADD COLUMN expired REAL")
 
 
+def _verification_event_hash(review_id, sequence, event, decision_code, actor_digest,
+                             idempotency_key_hash, created, previous_hash):
+    payload = json.dumps(
+        [review_id, sequence, event, decision_code or "", actor_digest or "",
+         idempotency_key_hash, float(created), previous_hash or ""],
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _insert_verification_review(db, company_id, subject_user_id, review_kind, created):
+    if review_kind not in VERIFICATION_REVIEW_KINDS:
+        raise ValueError("verification_review_kind")
+    review_id = secrets.token_hex(16)
+    submission_hash = hashlib.sha256(
+        f"registration:{review_kind}:{company_id}:{subject_user_id}".encode("ascii")
+    ).hexdigest()
+    event_hash = _verification_event_hash(
+        review_id, 1, "submitted", None, None, submission_hash, created, None
+    )
+    db.execute(
+        """INSERT OR IGNORE INTO account_verification_reviews
+           (id,review_kind,company_id,subject_user_id,status,submission_key_hash,
+            created,updated,audit_head,version)
+           VALUES (?,?,?,?,?,?,?,?,?,1)""",
+        (review_id, review_kind, company_id, subject_user_id, "pending",
+         submission_hash, created, created, event_hash),
+    )
+    row = db.execute(
+        """SELECT id FROM account_verification_reviews
+           WHERE review_kind=? AND company_id=? AND subject_user_id=?""",
+        (review_kind, company_id, subject_user_id),
+    ).fetchone()
+    actual_id = row[0]
+    if actual_id == review_id:
+        db.execute(
+            """INSERT INTO account_verification_audit
+               (review_id,sequence,event,decision_code,actor_digest,
+                idempotency_key_hash,created,previous_hash,event_hash)
+               VALUES (?,1,'submitted',NULL,NULL,?,?,NULL,?)""",
+            (review_id, submission_hash, created, event_hash),
+        )
+    return actual_id
+
+
+def _migrate_verification_reviews_v1(db):
+    db.execute("""CREATE TABLE IF NOT EXISTS account_verification_operator_meta (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        secret_fingerprint TEXT NOT NULL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS account_verification_reviews (
+        id TEXT PRIMARY KEY,
+        review_kind TEXT NOT NULL CHECK(review_kind IN ('company_representative','membership')),
+        company_id TEXT NOT NULL, subject_user_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
+        submission_key_hash TEXT NOT NULL,
+        decision_key_hash TEXT, decision_code TEXT, decision_actor_digest TEXT,
+        created REAL NOT NULL, updated REAL NOT NULL, decided REAL,
+        audit_head TEXT NOT NULL, version INTEGER NOT NULL,
+        FOREIGN KEY(company_id) REFERENCES account_companies(id),
+        FOREIGN KEY(subject_user_id) REFERENCES account_users(id),
+        UNIQUE(review_kind,company_id,subject_user_id),
+        UNIQUE(decision_key_hash))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS account_verification_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        review_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+        event TEXT NOT NULL CHECK(event IN ('submitted','approved','rejected','trusted_fixture_approved')),
+        decision_code TEXT, actor_digest TEXT,
+        idempotency_key_hash TEXT NOT NULL, created REAL NOT NULL,
+        previous_hash TEXT, event_hash TEXT NOT NULL UNIQUE,
+        FOREIGN KEY(review_id) REFERENCES account_verification_reviews(id),
+        UNIQUE(review_id,sequence))""")
+    db.execute("""CREATE TRIGGER IF NOT EXISTS account_verification_audit_no_update
+        BEFORE UPDATE ON account_verification_audit
+        BEGIN SELECT RAISE(ABORT,'verification_audit_append_only'); END""")
+    db.execute("""CREATE TRIGGER IF NOT EXISTS account_verification_audit_no_delete
+        BEFORE DELETE ON account_verification_audit
+        BEGIN SELECT RAISE(ABORT,'verification_audit_append_only'); END""")
+    db.execute("CREATE INDEX IF NOT EXISTS account_verification_queue ON account_verification_reviews(status,created,id)")
+    companies = db.execute(
+        "SELECT id,verified,created FROM account_companies ORDER BY created,id"
+    ).fetchall()
+    for company in companies:
+        company_id, verified, company_created = company[0], bool(company[1]), float(company[2])
+        users = db.execute(
+            """SELECT id,membership_verified,created FROM account_users
+               WHERE company_id=? AND active=1 ORDER BY created,id""",
+            (company_id,),
+        ).fetchall()
+        if not users:
+            continue
+        if not verified:
+            _insert_verification_review(
+                db, company_id, users[0][0], "company_representative",
+                max(company_created, float(users[0][2])),
+            )
+            for user in users[1:]:
+                if not bool(user[1]):
+                    _insert_verification_review(
+                        db, company_id, user[0], "membership", float(user[2])
+                    )
+        else:
+            for user in users:
+                if not bool(user[1]):
+                    _insert_verification_review(
+                        db, company_id, user[0], "membership", float(user[2])
+                    )
+
+
 ACCOUNT_MIGRATIONS = (
     SQLiteMigration(1, "accounts_and_consultations_v1", hashlib.sha256(b"accounts-v1-20261026").hexdigest(), _migrate_accounts_v1),
     SQLiteMigration(2, "billing_sandbox_v1", hashlib.sha256(b"billing-v1-20261026").hexdigest(), _migrate_billing_v1),
     SQLiteMigration(3, "billing_expiry_v1", hashlib.sha256(b"billing-expiry-v1-20261026").hexdigest(), _migrate_billing_expiry_v1),
+    SQLiteMigration(4, "verification_reviews_v1", hashlib.sha256(b"verification-reviews-v1-20261028").hexdigest(), _migrate_verification_reviews_v1),
 )
 
 
 class AccountStore:
     durable = False
 
-    def __init__(self, path):
+    def __init__(self, path, *, verification_operator_secret=None,
+                 allow_test_verification=False):
+        if (verification_operator_secret is not None
+                and (not isinstance(verification_operator_secret, bytes)
+                     or not 32 <= len(verification_operator_secret) <= 256)):
+            raise VerificationAuthorizationError("verification_operator_configuration_invalid")
+        if type(allow_test_verification) is not bool:
+            raise VerificationAuthorizationError("verification_operator_configuration_invalid")
         self.path = Path(path)
+        self._verification_operator_secret = (
+            bytes(verification_operator_secret)
+            if verification_operator_secret is not None else None
+        )
+        self._allow_test_verification = allow_test_verification
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._dummy_hash = generate_password_hash(secrets.token_urlsafe(32))
         with self.connect() as db:
             apply_sqlite_migrations(db, "accounts", ACCOUNT_MIGRATIONS)
+        self._bind_verification_operator_secret()
         self.path.chmod(0o600)
+
+    def _bind_verification_operator_secret(self):
+        if self._verification_operator_secret is None:
+            return
+        fingerprint = hashlib.sha256(self._verification_operator_secret).hexdigest()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT secret_fingerprint FROM account_verification_operator_meta WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    "INSERT INTO account_verification_operator_meta VALUES (1,?)",
+                    (fingerprint,),
+                )
+            elif not hmac.compare_digest(str(row[0]), fingerprint):
+                raise VerificationAuthorizationError("verification_operator_secret_mismatch")
+
+    def _authorize_verification_operator(self, authorization):
+        if (self._verification_operator_secret is None
+                or not isinstance(authorization, bytes)
+                or not hmac.compare_digest(self._verification_operator_secret, authorization)):
+            raise VerificationAuthorizationError("verification_operator_unauthorized")
 
     def schema_versions(self):
         with self.connect() as db:
@@ -266,6 +428,9 @@ class AccountStore:
                     """INSERT INTO account_users(id,company_id,email,password_hash,role,locale,created)
                        VALUES (?,?,?,?,?,?,?)""",
                     (user_id, company_id, email, password_hash, role, locale, time.time()),
+                )
+                _insert_verification_review(
+                    db, company_id, user_id, "company_representative", time.time()
                 )
         except sqlite3.IntegrityError as exc:
             # Neither auto-join a known company nor disclose the conflicting field.
@@ -354,6 +519,8 @@ class AccountStore:
         This is intentionally not exposed as an HTTP endpoint or auto-invoked by
         email confirmation. Local tests simulate the operator decision.
         """
+        if not self._allow_test_verification:
+            raise VerificationAuthorizationError("trusted_fixture_verification_disabled")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             user = db.execute("SELECT 1 FROM account_users WHERE id=? AND company_id=? AND active=1",
@@ -362,6 +529,36 @@ class AccountStore:
                 raise ValueError("representative")
             db.execute("UPDATE account_companies SET verified=1 WHERE id=?", (company_id,))
             db.execute("UPDATE account_users SET membership_verified=1 WHERE id=?", (representative_user_id,))
+            review = db.execute(
+                """SELECT * FROM account_verification_reviews
+                   WHERE review_kind='company_representative' AND company_id=?
+                     AND subject_user_id=?""",
+                (company_id, representative_user_id),
+            ).fetchone()
+            if review and review["status"] == "pending":
+                now = time.time()
+                idem = hashlib.sha256(
+                    f"trusted-fixture:{review['id']}".encode("ascii")
+                ).hexdigest()
+                event_hash = _verification_event_hash(
+                    review["id"], review["version"] + 1, "trusted_fixture_approved",
+                    "trusted_test_fixture", None, idem, now, review["audit_head"],
+                )
+                db.execute(
+                    """INSERT INTO account_verification_audit
+                       (review_id,sequence,event,decision_code,actor_digest,
+                        idempotency_key_hash,created,previous_hash,event_hash)
+                       VALUES (?,?,?,?,NULL,?,?,?,?)""",
+                    (review["id"], review["version"] + 1, "trusted_fixture_approved",
+                     "trusted_test_fixture", idem, now, review["audit_head"], event_hash),
+                )
+                db.execute(
+                    """UPDATE account_verification_reviews
+                       SET status='approved',decision_key_hash=?,decision_code='trusted_test_fixture',
+                           updated=?,decided=?,audit_head=?,version=version+1
+                       WHERE id=?""",
+                    (idem, now, now, event_hash, review["id"]),
+                )
 
     def add_member(self, company_id, *, email, password, role, locale="it", approved=False):
         """Trusted provisioning only; no public auto-join by company identifier."""
@@ -371,11 +568,182 @@ class AccountStore:
             raise ValueError("member")
         user_id = secrets.token_hex(16)
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""INSERT INTO account_users
                        (id,company_id,email,password_hash,role,locale,membership_verified,created)
                        VALUES (?,?,?,?,?,?,?,?)""",
                        (user_id, company_id, email, generate_password_hash(password), role, locale, int(bool(approved)), time.time()))
+            if not approved:
+                _insert_verification_review(
+                    db, company_id, user_id, "membership", time.time()
+                )
         return self.get_user(user_id)
+
+    @staticmethod
+    def _review_public(row):
+        return {
+            "id": row["id"], "kind": row["review_kind"],
+            "company_id": row["company_id"], "subject_user_id": row["subject_user_id"],
+            "status": row["status"], "decision_code": row["decision_code"],
+            "created_at_utc": _utc(row["created"]), "updated_at_utc": _utc(row["updated"]),
+            "decided_at_utc": _utc(row["decided"]) if row["decided"] is not None else None,
+            "version": row["version"],
+        }
+
+    def list_verification_reviews(self, *, authorization, status="pending", limit=50):
+        """Return a redacted operator queue; no public route calls this method."""
+        self._authorize_verification_operator(authorization)
+        if status not in {"pending", "approved", "rejected"}:
+            raise ValueError("verification_review_status")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("verification_review_limit")
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT * FROM account_verification_reviews
+                   WHERE status=? ORDER BY created,id LIMIT ?""",
+                (status, limit),
+            ).fetchall()
+        return [self._review_public(row) for row in rows]
+
+    def verification_review_audit(self, review_id, *, authorization):
+        """Return the append-only, redacted audit chain for one review."""
+        self._authorize_verification_operator(authorization)
+        if not isinstance(review_id, str) or not re.fullmatch(r"[a-f0-9]{32}", review_id):
+            raise ValueError("verification_review_id")
+        with self.connect() as db:
+            review = db.execute(
+                "SELECT audit_head FROM account_verification_reviews WHERE id=?", (review_id,)
+            ).fetchone()
+            rows = db.execute(
+                """SELECT sequence,event,decision_code,actor_digest,
+                          idempotency_key_hash,created,previous_hash,event_hash
+                   FROM account_verification_audit WHERE review_id=?
+                   ORDER BY sequence""",
+                (review_id,),
+            ).fetchall()
+        if not review or not rows:
+            raise VerificationReviewConflict("verification_review_unavailable")
+        previous = None
+        for row in rows:
+            expected = _verification_event_hash(
+                review_id, row["sequence"], row["event"], row["decision_code"],
+                row["actor_digest"], row["idempotency_key_hash"], row["created"],
+                previous,
+            )
+            if row["previous_hash"] != previous or not hmac.compare_digest(
+                    row["event_hash"], expected):
+                raise VerificationReviewConflict("verification_audit_invalid")
+            previous = row["event_hash"]
+        if not hmac.compare_digest(previous, review["audit_head"]):
+            raise VerificationReviewConflict("verification_audit_invalid")
+        return [{
+            "sequence": row["sequence"], "event": row["event"],
+            "decision_code": row["decision_code"],
+            "operator_digest": row["actor_digest"],
+            "created_at_utc": _utc(row["created"]),
+            "previous_hash": row["previous_hash"], "event_hash": row["event_hash"],
+        } for row in rows]
+
+    def decide_verification_review(self, review_id, *, decision, decision_code,
+                                   operator_ref, idempotency_key, authorization,
+                                   now=None):
+        """Trusted, atomic decision; raw operator and idempotency values are not stored."""
+        self._authorize_verification_operator(authorization)
+        if not isinstance(review_id, str) or not re.fullmatch(r"[a-f0-9]{32}", review_id):
+            raise ValueError("verification_review_id")
+        if decision not in {"approve", "reject"}:
+            raise ValueError("verification_decision")
+        allowed = (VERIFICATION_APPROVAL_CODES if decision == "approve"
+                   else VERIFICATION_REJECTION_CODES)
+        if decision_code not in allowed:
+            raise ValueError("verification_decision_code")
+        operator_ref = clean_text(operator_ref, "verification_operator", 80)
+        if (not isinstance(idempotency_key, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{31,127}", idempotency_key)):
+            raise ValueError("verification_idempotency_key")
+        now = time.time() if now is None else float(now)
+        if not (0 <= now < float("inf")):
+            raise ValueError("verification_time")
+        secret = self._verification_operator_secret
+        actor_digest = hmac.new(secret, ("actor:" + operator_ref).encode(), hashlib.sha256).hexdigest()
+        decision_digest = hmac.new(secret, ("decision:" + idempotency_key).encode(), hashlib.sha256).hexdigest()
+        status = "approved" if decision == "approve" else "rejected"
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                review = db.execute(
+                    "SELECT * FROM account_verification_reviews WHERE id=?", (review_id,)
+                ).fetchone()
+                if not review:
+                    raise VerificationReviewConflict("verification_review_unavailable")
+                if review["decision_key_hash"] == decision_digest:
+                    if (review["status"] == status and review["decision_code"] == decision_code
+                            and review["decision_actor_digest"] == actor_digest):
+                        return self._review_public(review)
+                    raise VerificationReviewConflict("verification_idempotency_conflict")
+                if review["status"] != "pending":
+                    raise VerificationReviewConflict("verification_review_already_decided")
+                if decision == "reject":
+                    allowed_rejections = (
+                        {"company_identity_unverified", "representative_authority_unverified",
+                         "conflicting_company_record", "insufficient_evidence"}
+                        if review["review_kind"] == "company_representative"
+                        else {"membership_unverified", "insufficient_evidence"}
+                    )
+                    if decision_code not in allowed_rejections:
+                        raise ValueError("verification_decision_code")
+                subject = db.execute(
+                    """SELECT u.active,u.company_id,c.verified AS company_verified
+                       FROM account_users u JOIN account_companies c ON c.id=u.company_id
+                       WHERE u.id=? AND u.company_id=?""",
+                    (review["subject_user_id"], review["company_id"]),
+                ).fetchone()
+                if not subject or not subject["active"]:
+                    raise VerificationReviewConflict("verification_subject_unavailable")
+                if (decision == "approve" and review["review_kind"] == "membership"
+                        and not subject["company_verified"]):
+                    raise VerificationReviewConflict("verification_company_not_verified")
+                if decision == "approve":
+                    if review["review_kind"] == "company_representative":
+                        if decision_code != "identity_and_authority_confirmed":
+                            raise ValueError("verification_decision_code")
+                        db.execute(
+                            "UPDATE account_companies SET verified=1 WHERE id=?",
+                            (review["company_id"],),
+                        )
+                    elif decision_code != "membership_confirmed":
+                        raise ValueError("verification_decision_code")
+                    db.execute(
+                        "UPDATE account_users SET membership_verified=1 WHERE id=?",
+                        (review["subject_user_id"],),
+                    )
+                event_hash = _verification_event_hash(
+                    review_id, review["version"] + 1, status, decision_code,
+                    actor_digest, decision_digest, now, review["audit_head"],
+                )
+                db.execute(
+                    """INSERT INTO account_verification_audit
+                       (review_id,sequence,event,decision_code,actor_digest,
+                        idempotency_key_hash,created,previous_hash,event_hash)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (review_id, review["version"] + 1, status, decision_code,
+                     actor_digest, decision_digest, now, review["audit_head"], event_hash),
+                )
+                db.execute(
+                    """UPDATE account_verification_reviews
+                       SET status=?,decision_key_hash=?,decision_code=?,
+                           decision_actor_digest=?,updated=?,decided=?,
+                           audit_head=?,version=version+1
+                       WHERE id=?""",
+                    (status, decision_digest, decision_code, actor_digest, now, now,
+                     event_hash, review_id),
+                )
+                final = db.execute(
+                    "SELECT * FROM account_verification_reviews WHERE id=?", (review_id,)
+                ).fetchone()
+                return self._review_public(final)
+        except sqlite3.IntegrityError as exc:
+            raise VerificationReviewConflict("verification_idempotency_conflict") from exc
 
     @staticmethod
     def _consultation_policy(included, period_months):

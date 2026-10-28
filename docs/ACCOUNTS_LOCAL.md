@@ -21,8 +21,13 @@ only a digest, purpose and expiration are stored. No HTTP response returns the
 raw token. Email and reset confirmation accept a supplied token in a JSON body,
 require CSRF/same-origin checks and consume it once. Password reset invalidates
 existing account sessions via a stored version. Company/membership verification
-has no public endpoint; local tests simulate a real operator check through
-`verify_company(company_id, representative_user_id)`.
+has no public endpoint. New registrations and unapproved members enter a local
+operator queue. The queue requires an explicit in-process capability, stores no
+raw operator reference or idempotency key, and records each coded decision in an
+append-only, hash-linked audit. Company approval and representative authority
+are one atomic decision; a later member can be approved only after the company.
+The older `verify_company` shortcut is disabled outside explicit test fixtures.
+No identifier, email domain or submitted role can approve either state.
 
 The delivery boundary is provider-neutral and remains deliberately unwired. It
 may prepare verification, password-reset and company-invitation messages only
@@ -33,6 +38,12 @@ identical for known and unknown email addresses and never claims a mail was sent
 The current local flow therefore cannot be presented as unattended production
 onboarding, password recovery or invitation delivery. Do not expose tokens in
 logs, URLs, analytics, browser storage or chat.
+
+The customer status view keeps three decisions separate: personal email,
+company identity and the person's authorisation for that company. A declared
+role or entered UID/CHE identifier never approves the latter two. Pending
+company and membership states explicitly require an operator decision, while
+analysis, history, consultation and checkout remain unavailable.
 
 The unwired contract accepts only these future action paths: `verify_email` uses
 `/account/verify-email`, `reset_password` uses `/account/reset-password`, and
@@ -55,7 +66,8 @@ The trial entitlement is shared by all approved users of the same company.
 The archive filters by company **and owner** and now retains original media in
 the protected local history foundation. Shared company case access,
 plan/subscription benefits, invitation workflow,
-real company-verification policy and delivery remain separate future work.
+external registry checks, production operator tooling and delivery remain
+separate future work.
 No names, prices, consultation counts or response-time promises are fixed here.
 
 Account entry pages are `/register` and `/account`; unverified/anonymous account

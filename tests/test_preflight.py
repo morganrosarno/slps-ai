@@ -176,7 +176,7 @@ class PreflightTests(unittest.TestCase):
 
     @staticmethod
     def eligible_account(db_path: Path):
-        store = AccountStore(db_path)
+        store = AccountStore(db_path, allow_test_verification=True)
         user = store.register(email="owner@example.test", password="long-account-test-password",
                               company_name="Synthetic Company", company_identifier="CHE123456789",
                               role="Representative", locale="it")

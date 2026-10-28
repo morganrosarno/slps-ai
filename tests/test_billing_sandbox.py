@@ -204,7 +204,7 @@ def test_store_reopen_preserves_immutable_snapshot_and_no_payment_columns(app):
         user["company_id"], user["id"], "tier_partner_v1", "annual",
         idempotency_key="persistent-checkout-key",
     )
-    reopened = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    reopened = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     saved = reopened.get_checkout_simulation(created["checkout_id"], user["company_id"], user["id"])
     assert saved["selection"] == created["selection"]
     with reopened.connect() as db:
@@ -213,7 +213,7 @@ def test_store_reopen_preserves_immutable_snapshot_and_no_payment_columns(app):
 
 
 def test_expiry_is_materialized_once_and_releases_open_intent_capacity(app):
-    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     user = register(store)
     first = store.create_checkout_simulation(
         user["company_id"], user["id"], "tier_essential_v1", "monthly",
@@ -247,7 +247,7 @@ def test_expiry_is_materialized_once_and_releases_open_intent_capacity(app):
 
 
 def test_open_intent_cap_is_atomic_per_company_and_user(app):
-    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     user = register(store)
 
     def attempt(index):
@@ -272,7 +272,7 @@ def test_open_intent_cap_is_atomic_per_company_and_user(app):
 
 
 def test_open_intent_cap_is_scoped_to_each_verified_company_member(app):
-    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     owner = register(store)
     member = store.add_member(
         owner["company_id"], email="cap-member@example.test", password=PASSWORD,
@@ -291,7 +291,7 @@ def test_open_intent_cap_is_scoped_to_each_verified_company_member(app):
 
 
 def test_cap_does_not_block_same_idempotent_replay(app):
-    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     user = register(store)
     kwargs = dict(
         company_id=user["company_id"], user_id=user["id"],
@@ -307,7 +307,7 @@ def test_cap_does_not_block_same_idempotent_replay(app):
 
 def test_api_returns_stable_cap_and_expired_codes(app, monkeypatch):
     app.config["BILLING_SANDBOX_MAX_OPEN_INTENTS"] = 1
-    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     register(store)
     client = app.test_client()
     session = login(client)
@@ -332,7 +332,7 @@ def test_api_returns_stable_cap_and_expired_codes(app, monkeypatch):
 
 
 def test_private_checkout_page_requires_flag_login_and_verified_company(app):
-    store = AccountStore(app.config["ACCOUNT_DB_PATH"])
+    store = AccountStore(app.config["ACCOUNT_DB_PATH"], allow_test_verification=True)
     pending = register(store, verified=False)
     client = app.test_client()
     assert client.get("/account/checkout").status_code == 302

@@ -98,14 +98,35 @@ test('Pending email/company/member states stay separate and never unlock workspa
   assert.equal(h.nodes['email-verification'].dataset.state, 'pending');
   assert.equal(h.nodes['company-verification'].dataset.state, 'pending');
   assert.equal(h.nodes['membership-verification'].dataset.state, 'pending');
+  assert.equal(h.nodes['email-verification'].textContent, ui.dictionaries.it.emailPending);
+  assert.equal(h.nodes['company-verification'].textContent, ui.dictionaries.it.companyPending);
+  assert.equal(h.nodes['membership-verification'].textContent, ui.dictionaries.it.membershipPending);
+  assert.match(h.nodes['company-verification'].textContent, /operatore/i);
   assert.equal(h.nodes['verification-pending-note'].hidden, false);
   assert.equal(h.nodes['delivery-note'].hidden, false);
   assert.equal(h.nodes['account-workspace'].hidden, true);
   h.controller.applySession({ ...pending, account: { ...pending.account, email_verified: true } });
   assert.equal(h.nodes['email-verification'].dataset.state, 'verified');
+  assert.equal(h.nodes['email-verification'].textContent, ui.dictionaries.it.emailVerified);
   assert.equal(h.nodes['company-verification'].dataset.state, 'pending');
   assert.equal(h.nodes['delivery-note'].hidden, true);
   assert.equal(h.nodes['account-workspace'].hidden, true);
+});
+
+test('Every language distinguishes email, company and membership review without automatic approval', () => {
+  const required = {
+    it: /operatore/i,
+    de: /zuständige Person/i,
+    fr: /personne responsable/i,
+    en: /operator/i
+  };
+  for (const language of ui.locales) {
+    const copy = ui.dictionaries[language];
+    assert.notEqual(copy.emailPending, copy.companyPending);
+    assert.notEqual(copy.companyPending, copy.membershipPending);
+    assert.match(copy.companyPending, required[language]);
+    assert.match(copy.pendingNote, /non|nicht|pas|not/i);
+  }
 });
 
 test('Workspace link requires every explicit verification flag and backend eligibility', async () => {
