@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import sqlite3
 
 import pytest
@@ -29,6 +30,25 @@ def register(accounts, *, email="owner@example.test", identifier="CHE123456789")
 
 def key(value):
     return "verification:synthetic:" + value * 40
+
+
+def evidence(accounts, review):
+    categories = ({"commercial_register_extract", "representative_authority_record"}
+                  if review["kind"] == "company_representative"
+                  else {"membership_authority_record"})
+    receipts = []
+    for category in sorted(categories):
+        receipt = accounts.record_verification_evidence(
+            review["id"], category=category,
+            content_sha256=hashlib.sha256(category.encode()).hexdigest(),
+            observed_at=1_700_000_000,
+            verified_at=1_750_000_000, expires_at=2_800_000_000,
+            verifier_ref="operator-1",
+            idempotency_key=key(category[0] + review["id"][0]),
+            authorization=SECRET, now=1_800_000_000,
+        )
+        receipts.append(receipt["id"])
+    return receipts
 
 
 def test_registration_creates_pending_redacted_review_and_never_auto_approves(tmp_path):
@@ -101,6 +121,7 @@ def test_legacy_unverified_company_backfills_representative_and_member_reviews(t
         company_review["id"], decision="approve",
         decision_code="identity_and_authority_confirmed",
         operator_ref="operator-1", idempotency_key=key("l"),
+        evidence_receipt_ids=evidence(accounts, company_review),
         authorization=SECRET,
     )
     assert accounts.get_user("u1")["company_verified"]
@@ -110,6 +131,7 @@ def test_legacy_unverified_company_backfills_representative_and_member_reviews(t
         member_review["id"], decision="approve",
         decision_code="membership_confirmed",
         operator_ref="operator-1", idempotency_key=key("n"),
+        evidence_receipt_ids=evidence(accounts, member_review),
         authorization=SECRET,
     )
     assert accounts.get_user("u2")["membership_verified"]
@@ -132,6 +154,7 @@ def test_company_and_authority_approval_is_atomic_audited_and_redacted(tmp_path)
         review["id"], decision="approve",
         decision_code="identity_and_authority_confirmed",
         operator_ref="synthetic-operator@example.test", idempotency_key=key("a"),
+        evidence_receipt_ids=evidence(accounts, review),
         authorization=SECRET, now=1_800_000_000,
     )
     assert result["status"] == "approved" and result["version"] == 2
@@ -154,6 +177,7 @@ def test_rejection_keeps_company_and_membership_blocked(tmp_path):
     result = accounts.decide_verification_review(
         review["id"], decision="reject", decision_code="insufficient_evidence",
         operator_ref="operator-1", idempotency_key=key("r"),
+        evidence_receipt_ids=evidence(accounts, review),
         authorization=SECRET, now=1_800_000_000,
     )
     assert result["status"] == "rejected"
@@ -175,18 +199,21 @@ def test_membership_review_requires_verified_company_then_unlocks_only_member(tm
         accounts.decide_verification_review(
             member_review["id"], decision="approve", decision_code="membership_confirmed",
             operator_ref="operator-1", idempotency_key=key("m"),
+            evidence_receipt_ids=evidence(accounts, member_review),
             authorization=SECRET,
         )
     accounts.decide_verification_review(
         company_review["id"], decision="approve",
         decision_code="identity_and_authority_confirmed",
         operator_ref="operator-1", idempotency_key=key("c"),
+        evidence_receipt_ids=evidence(accounts, company_review),
         authorization=SECRET,
     )
     assert not accounts.get_user(member["id"])["membership_verified"]
     accounts.decide_verification_review(
         member_review["id"], decision="approve", decision_code="membership_confirmed",
         operator_ref="operator-1", idempotency_key=key("m2"),
+        evidence_receipt_ids=evidence(accounts, member_review),
         authorization=SECRET,
     )
     assert accounts.get_user(member["id"])["membership_verified"]
@@ -197,6 +224,7 @@ def test_same_decision_is_idempotent_across_concurrent_instances(tmp_path):
     first = AccountStore(path, verification_operator_secret=SECRET)
     register(first)
     review = first.list_verification_reviews(authorization=SECRET)[0]
+    receipt_ids = evidence(first, review)
     instances = [
         AccountStore(path, verification_operator_secret=SECRET) for _ in range(8)
     ]
@@ -206,6 +234,7 @@ def test_same_decision_is_idempotent_across_concurrent_instances(tmp_path):
             review["id"], decision="approve",
             decision_code="identity_and_authority_confirmed",
             operator_ref="operator-1", idempotency_key=key("i"),
+            evidence_receipt_ids=receipt_ids,
             authorization=SECRET,
         )
 
@@ -220,9 +249,11 @@ def test_reused_idempotency_key_with_different_decision_fails_closed(tmp_path):
     accounts = store(tmp_path)
     register(accounts)
     review = accounts.list_verification_reviews(authorization=SECRET)[0]
+    receipt_ids = evidence(accounts, review)
     accounts.decide_verification_review(
         review["id"], decision="reject", decision_code="insufficient_evidence",
         operator_ref="operator-1", idempotency_key=key("x"),
+        evidence_receipt_ids=receipt_ids,
         authorization=SECRET,
     )
     with pytest.raises(VerificationReviewConflict, match="idempotency_conflict"):
@@ -230,6 +261,7 @@ def test_reused_idempotency_key_with_different_decision_fails_closed(tmp_path):
             review["id"], decision="approve",
             decision_code="identity_and_authority_confirmed",
             operator_ref="operator-1", idempotency_key=key("x"),
+            evidence_receipt_ids=receipt_ids,
             authorization=SECRET,
         )
 
@@ -261,6 +293,7 @@ def test_audit_rows_are_append_only_and_tamper_detection_fails_closed(tmp_path):
             review["id"], decision="approve",
             decision_code="identity_and_authority_confirmed",
             operator_ref="operator-1", idempotency_key=key("t"),
+            evidence_receipt_ids=["0" * 32],
             authorization=SECRET,
         )
 
@@ -277,6 +310,7 @@ def test_decision_code_must_match_decision(tmp_path, decision, code):
         accounts.decide_verification_review(
             review["id"], decision=decision, decision_code=code,
             operator_ref="operator-1", idempotency_key=key("v"),
+            evidence_receipt_ids=["0" * 32],
             authorization=SECRET,
         )
 

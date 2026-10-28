@@ -9,6 +9,7 @@ projection that excludes personal data and stored digests.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -26,6 +27,7 @@ if str(ROOT) not in sys.path:
 from accounts import (  # noqa: E402
     AccountStore,
     VERIFICATION_APPROVAL_CODES,
+    VERIFICATION_EVIDENCE_CATEGORIES,
     VERIFICATION_REJECTION_CODES,
     VerificationAuthorizationError,
     VerificationReviewConflict,
@@ -38,6 +40,8 @@ IDEMPOTENCY_ENV = "SLPS_VERIFICATION_IDEMPOTENCY_KEY"
 DB_ENV = "SLPS_ACCOUNT_DB_PATH"
 MAX_SECRET_BYTES = 256
 MAX_DECISION_INPUT_BYTES = 4096
+MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
+MAX_EVIDENCE_METADATA_BYTES = 4096
 
 
 class OperatorInputError(ValueError):
@@ -62,15 +66,26 @@ def _parser() -> JsonArgumentParser:
     audit = commands.add_parser("audit", add_help=False)
     audit.add_argument("review_id")
 
+    evidence = commands.add_parser("evidence", add_help=False)
+    evidence.add_argument("review_id")
+    evidence.add_argument(
+        "--category", required=True,
+        choices=sorted(set().union(*VERIFICATION_EVIDENCE_CATEGORIES.values())),
+    )
+    evidence.add_argument("--evidence-fd", type=int, required=True)
+    evidence.add_argument("--receipt-fd", type=int, required=True)
+
     approve = commands.add_parser("approve", add_help=False)
     approve.add_argument("review_id")
     approve.add_argument("--reason", required=True, choices=sorted(VERIFICATION_APPROVAL_CODES))
     approve.add_argument("--decision-fd", type=int)
+    approve.add_argument("--evidence-receipt", action="append")
 
     reject = commands.add_parser("reject", add_help=False)
     reject.add_argument("review_id")
     reject.add_argument("--reason", required=True, choices=sorted(VERIFICATION_REJECTION_CODES))
     reject.add_argument("--decision-fd", type=int)
+    reject.add_argument("--evidence-receipt", action="append")
     return parser
 
 
@@ -127,6 +142,42 @@ def _decision_input(args: argparse.Namespace, env: Mapping[str, str]) -> tuple[s
     if not isinstance(operator_ref, str) or not isinstance(idempotency_key, str):
         raise OperatorInputError("decision_input_missing")
     return operator_ref, idempotency_key
+
+
+def _utc_timestamp(value: object) -> float:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise OperatorInputError("invalid_evidence_time")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise OperatorInputError("invalid_evidence_time") from exc
+    if parsed.tzinfo != timezone.utc:
+        raise OperatorInputError("invalid_evidence_time")
+    return parsed.timestamp()
+
+
+def _evidence_input(args: argparse.Namespace) -> tuple[str, str, float, float, float, str]:
+    content = _read_limited_fd(args.evidence_fd, MAX_EVIDENCE_BYTES)
+    if not content:
+        raise OperatorInputError("empty_evidence")
+    raw = _read_limited_fd(args.receipt_fd, MAX_EVIDENCE_METADATA_BYTES)
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise OperatorInputError("invalid_evidence_metadata") from exc
+    expected = {
+        "verifier_ref", "idempotency_key", "observed_at_utc",
+        "verified_at_utc", "expires_at_utc",
+    }
+    if not isinstance(document, dict) or set(document) != expected:
+        raise OperatorInputError("invalid_evidence_metadata")
+    return (
+        document["verifier_ref"], document["idempotency_key"],
+        _utc_timestamp(document["observed_at_utc"]),
+        _utc_timestamp(document["verified_at_utc"]),
+        _utc_timestamp(document["expires_at_utc"]),
+        hashlib.sha256(content).hexdigest(),
+    )
 
 
 def _database_path(args: argparse.Namespace, env: Mapping[str, str]) -> Path:
@@ -197,10 +248,11 @@ def _help_document() -> dict[str, object]:
     return {
         "ok": True,
         "operation": "help",
-        "commands": ["list", "audit", "approve", "reject"],
+        "commands": ["list", "audit", "evidence", "approve", "reject"],
         "capability_sources": [SECRET_ENV, "--secret-fd"],
         "database_sources": [DB_ENV, "--db"],
         "decision_sources": [[OPERATOR_ENV, IDEMPOTENCY_ENV], "--decision-fd"],
+        "evidence_sources": ["--evidence-fd", "--receipt-fd"],
     }
 
 
@@ -237,7 +289,28 @@ def _execute(args: argparse.Namespace, env: Mapping[str, str]) -> dict[str, obje
                 "event": event["event"],
                 "decision_code": event["decision_code"],
                 "created_at_utc": event["created_at_utc"],
+                "evidence_bound": event["evidence_bound"],
             } for event in events],
+        }
+    if args.command == "evidence":
+        (verifier_ref, idempotency_key, observed_at, verified_at, expires_at,
+         content_sha256) = _evidence_input(args)
+        receipt = store.record_verification_evidence(
+            args.review_id, category=args.category,
+            content_sha256=content_sha256, observed_at=observed_at,
+            verified_at=verified_at, expires_at=expires_at,
+            verifier_ref=verifier_ref, idempotency_key=idempotency_key,
+            authorization=secret,
+        )
+        return {
+            "ok": True, "operation": "evidence",
+            "receipt": {
+                "receipt_id": receipt["id"], "category": receipt["category"],
+                "observed_at_utc": receipt["observed_at_utc"],
+                "verified_at_utc": receipt["verified_at_utc"],
+                "expires_at_utc": receipt["expires_at_utc"],
+                "integrity_verified": receipt["integrity_verified"],
+            },
         }
     operator_ref, idempotency_key = _decision_input(args, env)
     review = store.decide_verification_review(
@@ -246,6 +319,7 @@ def _execute(args: argparse.Namespace, env: Mapping[str, str]) -> dict[str, obje
         decision_code=args.reason,
         operator_ref=operator_ref,
         idempotency_key=idempotency_key,
+        evidence_receipt_ids=args.evidence_receipt,
         authorization=secret,
     )
     return {
@@ -262,12 +336,18 @@ def _error_document(exc: Exception) -> tuple[int, dict[str, object]]:
         code = str(exc)
         if code == "verification_audit_invalid":
             return 4, {"ok": False, "error": {"code": "audit_invalid"}}
+        if code == "verification_evidence_invalid":
+            return 4, {"ok": False, "error": {"code": "evidence_invalid"}}
         allowed = {
             "verification_review_unavailable",
             "verification_review_already_decided",
             "verification_idempotency_conflict",
             "verification_company_not_verified",
             "verification_subject_unavailable",
+            "verification_evidence_unavailable",
+            "verification_evidence_invalid",
+            "verification_evidence_incomplete",
+            "verification_evidence_idempotency_conflict",
         }
         return 5, {"ok": False, "error": {
             "code": code if code in allowed else "review_conflict",

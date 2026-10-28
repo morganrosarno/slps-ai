@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import io
 import json
 import os
@@ -29,7 +30,26 @@ def setup_review(tmp_path):
         locale="it",
     )
     review = accounts.list_verification_reviews(authorization=SECRET)[0]
+    receipt_ids = []
+    for category in ("commercial_register_extract", "representative_authority_record"):
+        receipt = accounts.record_verification_evidence(
+            review["id"], category=category,
+            content_sha256=hashlib.sha256(category.encode()).hexdigest(),
+            observed_at=1_700_000_000, verified_at=1_750_000_000,
+            expires_at=2_800_000_000, verifier_ref="operator-1",
+            idempotency_key="verification:evidence:" + category,
+            authorization=SECRET, now=1_800_000_000,
+        )
+        receipt_ids.append(receipt["id"])
+    review["_evidence_receipts"] = receipt_ids
     return path, accounts, user, review
+
+
+def evidence_args(review):
+    values = []
+    for receipt_id in review["_evidence_receipts"]:
+        values += ["--evidence-receipt", receipt_id]
+    return tuple(values)
 
 
 def run_tool(path, *args, env=None):
@@ -159,6 +179,7 @@ def test_approve_and_audit_are_redacted_and_replay_is_idempotent(tmp_path):
     path, accounts, user, review = setup_review(tmp_path)
     args = (
         "approve", review["id"], "--reason", "identity_and_authority_confirmed",
+        *evidence_args(review),
     )
 
     first = run_tool(path, *args, env=decision_env())
@@ -302,7 +323,7 @@ def test_corrupt_audit_blocks_queue_audit_and_decision(tmp_path):
     audited = run_tool(path, "audit", review["id"])
     decided = run_tool(
         path, "approve", review["id"], "--reason", "identity_and_authority_confirmed",
-        env=decision_env(),
+        *evidence_args(review), env=decision_env(),
     )
 
     for result in (listed, audited, decided):
@@ -329,7 +350,7 @@ def test_secret_and_decision_material_can_be_read_from_file_descriptors(tmp_path
         status = main([
             "--db", str(path), "--secret-fd", str(secret_read),
             "reject", review["id"], "--reason", "insufficient_evidence",
-            "--decision-fd", str(decision_read),
+            "--decision-fd", str(decision_read), *evidence_args(review),
         ], env={}, stdout=output)
     finally:
         os.close(secret_read)
@@ -349,6 +370,7 @@ def test_concurrent_same_command_has_one_atomic_audit_decision(tmp_path):
     path, accounts, _user, review = setup_review(tmp_path)
     args = (
         "approve", review["id"], "--reason", "identity_and_authority_confirmed",
+        *evidence_args(review),
     )
 
     def approve_once(_index):

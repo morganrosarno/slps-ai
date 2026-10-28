@@ -84,6 +84,18 @@ VERIFICATION_REJECTION_CODES = {
     "company_identity_unverified", "representative_authority_unverified",
     "membership_unverified", "conflicting_company_record", "insufficient_evidence",
 }
+VERIFICATION_EVIDENCE_CATEGORIES = {
+    "company_representative": {
+        "commercial_register_extract", "representative_authority_record",
+    },
+    "membership": {"membership_authority_record"},
+}
+VERIFICATION_REQUIRED_APPROVAL_EVIDENCE = {
+    "company_representative": {
+        "commercial_register_extract", "representative_authority_record",
+    },
+    "membership": {"membership_authority_record"},
+}
 
 
 BILLING_CATALOG_REVISION = "draft-2026-10-26-v1"
@@ -230,10 +242,14 @@ def _migrate_billing_expiry_v1(db):
 
 
 def _verification_event_hash(review_id, sequence, event, decision_code, actor_digest,
-                             idempotency_key_hash, created, previous_hash):
+                             idempotency_key_hash, created, previous_hash,
+                             evidence_bundle_hash=None):
+    fields = [review_id, sequence, event, decision_code or "", actor_digest or "",
+              idempotency_key_hash, float(created), previous_hash or ""]
+    if evidence_bundle_hash is not None:
+        fields.append(evidence_bundle_hash)
     payload = json.dumps(
-        [review_id, sequence, event, decision_code or "", actor_digest or "",
-         idempotency_key_hash, float(created), previous_hash or ""],
+        fields,
         ensure_ascii=True, separators=(",", ":"),
     ).encode("ascii")
     return hashlib.sha256(payload).hexdigest()
@@ -244,7 +260,8 @@ def _unchecked_verification_audit(db, review):
         raise VerificationReviewConflict("verification_review_unavailable")
     rows = db.execute(
         """SELECT sequence,event,decision_code,actor_digest,
-                  idempotency_key_hash,created,previous_hash,event_hash
+                  idempotency_key_hash,created,previous_hash,event_hash,
+                  evidence_bundle_hash
            FROM account_verification_audit WHERE review_id=?
            ORDER BY sequence""",
         (review["id"],),
@@ -256,7 +273,7 @@ def _unchecked_verification_audit(db, review):
         expected = _verification_event_hash(
             review["id"], row["sequence"], row["event"], row["decision_code"],
             row["actor_digest"], row["idempotency_key_hash"], row["created"],
-            previous,
+            previous, row["evidence_bundle_hash"],
         )
         if (row["sequence"] != expected_sequence or row["previous_hash"] != previous
                 or not hmac.compare_digest(row["event_hash"], expected)):
@@ -283,7 +300,56 @@ def _unchecked_verification_audit(db, review):
           or review["decision_code"] != last["decision_code"]
           or review["decision_actor_digest"] != last["actor_digest"]):
         raise VerificationReviewConflict("verification_audit_invalid")
+    if last["evidence_bundle_hash"] is not None:
+        links = db.execute(
+            """SELECT receipt_id,receipt_hash
+               FROM account_verification_decision_evidence
+               WHERE review_id=? ORDER BY receipt_id""",
+            (review["id"],),
+        ).fetchall()
+        if not links:
+            raise VerificationReviewConflict("verification_audit_invalid")
+        receipt_hashes = []
+        for link in links:
+            receipt = db.execute(
+                "SELECT * FROM account_verification_evidence_receipts WHERE id=?",
+                (link["receipt_id"],),
+            ).fetchone()
+            if (receipt is None or receipt["review_id"] != review["id"]
+                    or not hmac.compare_digest(link["receipt_hash"], receipt["receipt_hash"])
+                    or not hmac.compare_digest(receipt["receipt_hash"],
+                                               _verification_evidence_hash(receipt))):
+                raise VerificationReviewConflict("verification_audit_invalid")
+            receipt_hashes.append(receipt["receipt_hash"])
+        expected_bundle = _verification_evidence_bundle_hash(review["id"], receipt_hashes)
+        if not hmac.compare_digest(last["evidence_bundle_hash"], expected_bundle):
+            raise VerificationReviewConflict("verification_audit_invalid")
+    elif db.execute(
+        "SELECT 1 FROM account_verification_decision_evidence WHERE review_id=? LIMIT 1",
+        (review["id"],),
+    ).fetchone() is not None:
+        raise VerificationReviewConflict("verification_audit_invalid")
     return rows
+
+
+def _verification_evidence_hash(receipt):
+    payload = json.dumps([
+        receipt["id"], receipt["review_id"], receipt["category"],
+        receipt["content_sha256"], float(receipt["observed_at"]),
+        float(receipt["verified_at"]),
+        float(receipt["expires_at"]) if receipt["expires_at"] is not None else None,
+        receipt["verifier_digest"], receipt["receipt_key_hash"],
+        float(receipt["created"]),
+    ], ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _verification_evidence_bundle_hash(review_id, receipt_hashes):
+    payload = json.dumps(
+        [review_id, sorted(receipt_hashes)],
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _verified_verification_audit(db, review):
@@ -394,11 +460,41 @@ def _migrate_verification_reviews_v1(db):
                     )
 
 
+def _migrate_verification_evidence_v1(db):
+    columns = {row[1] for row in db.execute("PRAGMA table_info(account_verification_audit)")}
+    if "evidence_bundle_hash" not in columns:
+        db.execute("ALTER TABLE account_verification_audit ADD COLUMN evidence_bundle_hash TEXT")
+    db.execute("""CREATE TABLE IF NOT EXISTS account_verification_evidence_receipts (
+        id TEXT PRIMARY KEY, review_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN (
+            'commercial_register_extract','representative_authority_record',
+            'membership_authority_record')),
+        content_sha256 TEXT NOT NULL, observed_at REAL NOT NULL,
+        verified_at REAL NOT NULL, expires_at REAL,
+        verifier_digest TEXT NOT NULL, receipt_key_hash TEXT NOT NULL UNIQUE,
+        created REAL NOT NULL, receipt_hash TEXT NOT NULL UNIQUE,
+        FOREIGN KEY(review_id) REFERENCES account_verification_reviews(id))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS account_verification_decision_evidence (
+        review_id TEXT NOT NULL, receipt_id TEXT NOT NULL, receipt_hash TEXT NOT NULL,
+        PRIMARY KEY(review_id,receipt_id),
+        FOREIGN KEY(review_id) REFERENCES account_verification_reviews(id),
+        FOREIGN KEY(receipt_id) REFERENCES account_verification_evidence_receipts(id))""")
+    for table in ("account_verification_evidence_receipts",
+                  "account_verification_decision_evidence"):
+        db.execute(f"""CREATE TRIGGER IF NOT EXISTS {table}_no_update
+            BEFORE UPDATE ON {table}
+            BEGIN SELECT RAISE(ABORT,'verification_evidence_append_only'); END""")
+        db.execute(f"""CREATE TRIGGER IF NOT EXISTS {table}_no_delete
+            BEFORE DELETE ON {table}
+            BEGIN SELECT RAISE(ABORT,'verification_evidence_append_only'); END""")
+    db.execute("""CREATE INDEX IF NOT EXISTS account_verification_evidence_review
+                  ON account_verification_evidence_receipts(review_id,category,created,id)""")
 ACCOUNT_MIGRATIONS = (
     SQLiteMigration(1, "accounts_and_consultations_v1", hashlib.sha256(b"accounts-v1-20261026").hexdigest(), _migrate_accounts_v1),
     SQLiteMigration(2, "billing_sandbox_v1", hashlib.sha256(b"billing-v1-20261026").hexdigest(), _migrate_billing_v1),
     SQLiteMigration(3, "billing_expiry_v1", hashlib.sha256(b"billing-expiry-v1-20261026").hexdigest(), _migrate_billing_expiry_v1),
     SQLiteMigration(4, "verification_reviews_v1", hashlib.sha256(b"verification-reviews-v1-20261028").hexdigest(), _migrate_verification_reviews_v1),
+    SQLiteMigration(5, "verification_evidence_v1", hashlib.sha256(b"verification-evidence-v1-20261028").hexdigest(), _migrate_verification_evidence_v1),
 )
 
 
@@ -682,10 +778,112 @@ class AccountStore:
             "operator_digest": row["actor_digest"],
             "created_at_utc": _utc(row["created"]),
             "previous_hash": row["previous_hash"], "event_hash": row["event_hash"],
+            "evidence_bound": row["evidence_bundle_hash"] is not None,
         } for row in rows]
 
+    @staticmethod
+    def _evidence_public(row):
+        return {
+            "id": row["id"], "category": row["category"],
+            "observed_at_utc": _utc(row["observed_at"]),
+            "verified_at_utc": _utc(row["verified_at"]),
+            "expires_at_utc": _utc(row["expires_at"]),
+            "integrity_verified": True,
+        }
+
+    def record_verification_evidence(self, review_id, *, category, content_sha256,
+                                     observed_at, verified_at, expires_at,
+                                     verifier_ref, idempotency_key, authorization,
+                                     now=None):
+        """Record only a digest and bounded metadata for evidence inspected offline."""
+        self._authorize_verification_operator(authorization)
+        if not isinstance(review_id, str) or not re.fullmatch(r"[a-f0-9]{32}", review_id):
+            raise ValueError("verification_review_id")
+        if not isinstance(content_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", content_sha256):
+            raise ValueError("verification_evidence_digest")
+        verifier_ref = clean_text(verifier_ref, "verification_operator", 80)
+        if (not isinstance(idempotency_key, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{31,127}", idempotency_key)):
+            raise ValueError("verification_idempotency_key")
+        try:
+            observed_at = float(observed_at)
+            verified_at = float(verified_at)
+            expires_at = float(expires_at)
+            now = time.time() if now is None else float(now)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("verification_evidence_time") from exc
+        if (not all(0 <= value < float("inf") for value in
+                    (observed_at, verified_at, expires_at, now))
+                or observed_at > verified_at or verified_at > now
+                or expires_at <= now):
+            raise ValueError("verification_evidence_time")
+        secret = self._verification_operator_secret
+        verifier_digest = hmac.new(
+            secret, ("actor:" + verifier_ref).encode(), hashlib.sha256,
+        ).hexdigest()
+        receipt_key_hash = hmac.new(
+            secret, ("evidence:" + idempotency_key).encode(), hashlib.sha256,
+        ).hexdigest()
+        receipt_id = secrets.token_hex(16)
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                review = db.execute(
+                    "SELECT * FROM account_verification_reviews WHERE id=?", (review_id,),
+                ).fetchone()
+                if review is None:
+                    raise VerificationReviewConflict("verification_review_unavailable")
+                _verified_verification_audit(db, review)
+                if review["status"] != "pending":
+                    raise VerificationReviewConflict("verification_review_already_decided")
+                if category not in VERIFICATION_EVIDENCE_CATEGORIES[review["review_kind"]]:
+                    raise ValueError("verification_evidence_category")
+                existing = db.execute(
+                    "SELECT * FROM account_verification_evidence_receipts WHERE receipt_key_hash=?",
+                    (receipt_key_hash,),
+                ).fetchone()
+                if existing is not None:
+                    if (existing["review_id"] == review_id
+                            and existing["category"] == category
+                            and existing["content_sha256"] == content_sha256
+                            and existing["observed_at"] == observed_at
+                            and existing["verified_at"] == verified_at
+                            and existing["expires_at"] == expires_at
+                            and existing["verifier_digest"] == verifier_digest
+                            and hmac.compare_digest(existing["receipt_hash"],
+                                                    _verification_evidence_hash(existing))):
+                        return self._evidence_public(existing)
+                    raise VerificationReviewConflict("verification_evidence_idempotency_conflict")
+                values = {
+                    "id": receipt_id, "review_id": review_id, "category": category,
+                    "content_sha256": content_sha256, "observed_at": observed_at,
+                    "verified_at": verified_at, "expires_at": expires_at,
+                    "verifier_digest": verifier_digest,
+                    "receipt_key_hash": receipt_key_hash, "created": now,
+                }
+                values["receipt_hash"] = _verification_evidence_hash(values)
+                db.execute(
+                    """INSERT INTO account_verification_evidence_receipts
+                       (id,review_id,category,content_sha256,observed_at,verified_at,
+                        expires_at,verifier_digest,receipt_key_hash,created,receipt_hash)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    tuple(values[key] for key in (
+                        "id", "review_id", "category", "content_sha256", "observed_at",
+                        "verified_at", "expires_at", "verifier_digest",
+                        "receipt_key_hash", "created", "receipt_hash",
+                    )),
+                )
+                stored = db.execute(
+                    "SELECT * FROM account_verification_evidence_receipts WHERE id=?",
+                    (receipt_id,),
+                ).fetchone()
+                return self._evidence_public(stored)
+        except sqlite3.IntegrityError as exc:
+            raise VerificationReviewConflict("verification_evidence_idempotency_conflict") from exc
+
     def decide_verification_review(self, review_id, *, decision, decision_code,
-                                   operator_ref, idempotency_key, authorization,
+                                   operator_ref, idempotency_key, evidence_receipt_ids,
+                                   authorization,
                                    now=None):
         """Trusted, atomic decision; raw operator and idempotency values are not stored."""
         self._authorize_verification_operator(authorization)
@@ -701,6 +899,13 @@ class AccountStore:
         if (not isinstance(idempotency_key, str)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{31,127}", idempotency_key)):
             raise ValueError("verification_idempotency_key")
+        if (not isinstance(evidence_receipt_ids, (list, tuple))
+                or not evidence_receipt_ids or len(evidence_receipt_ids) > 8
+                or any(not isinstance(item, str)
+                       or not re.fullmatch(r"[a-f0-9]{32}", item)
+                       for item in evidence_receipt_ids)
+                or len(set(evidence_receipt_ids)) != len(evidence_receipt_ids)):
+            raise ValueError("verification_evidence_receipts")
         now = time.time() if now is None else float(now)
         if not (0 <= now < float("inf")):
             raise ValueError("verification_time")
@@ -718,12 +923,50 @@ class AccountStore:
                     raise VerificationReviewConflict("verification_review_unavailable")
                 _verified_verification_audit(db, review)
                 if review["decision_key_hash"] == decision_digest:
+                    bound = [row[0] for row in db.execute(
+                        """SELECT receipt_id FROM account_verification_decision_evidence
+                           WHERE review_id=? ORDER BY receipt_id""", (review_id,),
+                    ).fetchall()]
                     if (review["status"] == status and review["decision_code"] == decision_code
-                            and review["decision_actor_digest"] == actor_digest):
+                            and review["decision_actor_digest"] == actor_digest
+                            and bound == sorted(evidence_receipt_ids)):
                         return self._review_public(review)
                     raise VerificationReviewConflict("verification_idempotency_conflict")
                 if review["status"] != "pending":
                     raise VerificationReviewConflict("verification_review_already_decided")
+                placeholders = ",".join("?" for _ in evidence_receipt_ids)
+                receipts = db.execute(
+                    f"""SELECT * FROM account_verification_evidence_receipts
+                         WHERE id IN ({placeholders}) ORDER BY id""",
+                    tuple(evidence_receipt_ids),
+                ).fetchall()
+                if len(receipts) != len(evidence_receipt_ids):
+                    raise VerificationReviewConflict("verification_evidence_unavailable")
+                categories = set()
+                receipt_hashes = []
+                for receipt in receipts:
+                    if (receipt["review_id"] != review_id
+                            or receipt["category"] not in VERIFICATION_EVIDENCE_CATEGORIES[review["review_kind"]]
+                            or receipt["verified_at"] > now or receipt["expires_at"] <= now
+                            or not hmac.compare_digest(receipt["receipt_hash"],
+                                                       _verification_evidence_hash(receipt))):
+                        raise VerificationReviewConflict("verification_evidence_invalid")
+                    categories.add(receipt["category"])
+                    receipt_hashes.append(receipt["receipt_hash"])
+                required = set()
+                if decision == "approve":
+                    required = VERIFICATION_REQUIRED_APPROVAL_EVIDENCE[review["review_kind"]]
+                elif decision_code in {"company_identity_unverified", "conflicting_company_record"}:
+                    required = {"commercial_register_extract"}
+                elif decision_code == "representative_authority_unverified":
+                    required = {"representative_authority_record"}
+                elif decision_code == "membership_unverified":
+                    required = {"membership_authority_record"}
+                if not required.issubset(categories):
+                    raise VerificationReviewConflict("verification_evidence_incomplete")
+                evidence_bundle_hash = _verification_evidence_bundle_hash(
+                    review_id, receipt_hashes,
+                )
                 if decision == "reject":
                     allowed_rejections = (
                         {"company_identity_unverified", "representative_authority_unverified",
@@ -761,14 +1004,23 @@ class AccountStore:
                 event_hash = _verification_event_hash(
                     review_id, review["version"] + 1, status, decision_code,
                     actor_digest, decision_digest, now, review["audit_head"],
+                    evidence_bundle_hash,
                 )
                 db.execute(
                     """INSERT INTO account_verification_audit
                        (review_id,sequence,event,decision_code,actor_digest,
-                        idempotency_key_hash,created,previous_hash,event_hash)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                        idempotency_key_hash,created,previous_hash,event_hash,
+                        evidence_bundle_hash)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
                     (review_id, review["version"] + 1, status, decision_code,
-                     actor_digest, decision_digest, now, review["audit_head"], event_hash),
+                     actor_digest, decision_digest, now, review["audit_head"], event_hash,
+                     evidence_bundle_hash),
+                )
+                db.executemany(
+                    """INSERT INTO account_verification_decision_evidence
+                       (review_id,receipt_id,receipt_hash) VALUES (?,?,?)""",
+                    [(review_id, receipt["id"], receipt["receipt_hash"])
+                     for receipt in receipts],
                 )
                 db.execute(
                     """UPDATE account_verification_reviews

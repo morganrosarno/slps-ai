@@ -33,7 +33,7 @@ def _limit_adapter(tmp_path):
 @pytest.mark.parametrize(
     ("factory", "namespace", "versions"),
     [
-        (_account_adapter, "accounts", (1, 2, 3, 4)),
+        (_account_adapter, "accounts", (1, 2, 3, 4, 5)),
         (_case_adapter, "cases", (1, 2)),
         (_limit_adapter, "limits", (1, 2, 3, 4)),
     ],
@@ -236,7 +236,7 @@ def test_historical_account_and_billing_database_bootstraps_without_data_loss(tm
     db.commit(); db.close()
 
     store = AccountStore(path)
-    assert store.schema_versions() == (1, 2, 3, 4)
+    assert store.schema_versions() == (1, 2, 3, 4, 5)
     with store.connect() as migrated:
         assert migrated.execute("SELECT name FROM account_companies WHERE id='c1'").fetchone()[0] == "Synthetic AG"
         row = migrated.execute("SELECT snapshot_json,expired FROM billing_checkout_intents WHERE id='b1'").fetchone()
