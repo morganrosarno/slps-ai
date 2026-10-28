@@ -147,6 +147,10 @@ La fondazione della registrazione self-service è descritta in `docs/ACCOUNTS_LO
 È disattivata per default; nel collaudo locale la consegna di verifiche email,
 recuperi password e inviti aziendali, oltre alla verifica reale dell'azienda,
 non è collegata. Nessun account in attesa può accedere ad analisi o casi.
+Il confine inattivo ammette un percorso distinto per ciascuna finalità e dispone
+di una prenotazione SQLite idempotente basata su digest HMAC. Questa protezione
+non invia messaggi e non rende attivi i percorsi cliente; impedisce invece un
+secondo tentativo ambiguo quando in futuro sarà iniettato un trasporto approvato.
 Token di conferma e recupero sono a scadenza e a uso singolo, conservati solo come hash;
 il reset della password invalida tutte le sessioni precedenti. Nessuna risposta HTTP
 espone un token o finge di aver inviato un'email. Un registro locale separato dalla
@@ -182,8 +186,8 @@ credito, disponibilità del modello o persistenza effettiva del volume.
 Il controllo distingue il profilo `pilot` da `accounts`: nel secondo non
 richiede la password pilota e verifica configurazione, schema, permessi e
 presenza di un account idoneo al login. Segnala come blocco l'apertura delle
-registrazioni finché verifica email e recupero password non hanno un canale di
-consegna reale. Non crea né modifica account durante il controllo.
+registrazioni finché verifica email, recupero password e inviti aziendali non
+hanno un canale di consegna reale. Non crea né modifica account durante il controllo.
 Il collaudo della versione reale è definito in `docs/STAGING_ACCEPTANCE.md`.
 Le viste e i test con dati sintetici non soddisfano la verifica del motore AI reale.
 

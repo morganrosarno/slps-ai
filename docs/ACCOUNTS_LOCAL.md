@@ -34,6 +34,21 @@ The current local flow therefore cannot be presented as unattended production
 onboarding, password recovery or invitation delivery. Do not expose tokens in
 logs, URLs, analytics, browser storage or chat.
 
+The unwired contract accepts only these future action paths: `verify_email` uses
+`/account/verify-email`, `reset_password` uses `/account/reset-password`, and
+`company_invitation` uses `/account/company-invitation`. They are allowlisted
+link contracts, not active customer endpoints. A different path fails before a
+reservation or transport attempt.
+
+`SQLiteDeliveryReservationStore` is the durable idempotency primitive for a
+future transport. It records only an HMAC-SHA256 digest of the operation key,
+never the raw key, and refuses to open the database if the injected secret does
+not match its stored fingerprint. The default retention is seven days and the
+default active-reservation cap is 50,000. At capacity it removes expired rows
+only, then fails closed; it never evicts an active reservation to permit another
+attempt. An expired key can be reserved again. This ledger does not mean that a
+message was delivered and is not wired into `server.py`.
+
 Every protected account request reloads the user, verification flags and session
 version from SQLite. Mode changes invalidate the old authentication session.
 The trial entitlement is shared by all approved users of the same company.
@@ -72,10 +87,12 @@ necessarie alla revoca delle sessioni, permessi locali e presenza di almeno un
 utente attivo con email, azienda e rappresentanza approvate. Non crea account,
 non migra il database e non stampa percorsi, email o altri dati.
 
-Il confine di consegna resta intenzionalmente scollegato da un trasporto. Per
-questo `SLPS_ACCOUNT_REGISTRATION_OPEN=true` è un blocco di staging:
-l'interfaccia accetterebbe una richiesta, ma non potrebbe consegnare verifica
-email, recupero password o inviti aziendali. Con registrazioni chiuse, un account verificato predisposto
+Il confine di consegna resta intenzionalmente scollegato da un trasporto. Il
+registro idempotente locale e i percorsi ammessi impediscono duplicati e link
+fuori contratto, ma non provano né eseguono un invio. Per questo
+`SLPS_ACCOUNT_REGISTRATION_OPEN=true` è un blocco di staging: l'interfaccia
+accetterebbe una richiesta, ma non potrebbe consegnare verifica email, recupero
+password o inviti aziendali. Con registrazioni chiuse, un account verificato predisposto
 in modo fidato consente il collaudo del login; l'assenza di consegna e la
 verifica umana di azienda/rappresentanza restano avvisi espliciti.
 

@@ -22,6 +22,11 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 PURPOSES = frozenset({"verify_email", "reset_password", "company_invitation"})
 LOCALES = frozenset({"it", "de", "fr", "en"})
+DEFAULT_ACTION_PATHS = (
+    ("verify_email", "/account/verify-email"),
+    ("reset_password", "/account/reset-password"),
+    ("company_invitation", "/account/company-invitation"),
+)
 
 
 class DeliveryBoundaryError(ValueError):
@@ -68,6 +73,7 @@ class DeliveryConfig:
     allowed_action_hosts: tuple[str, ...]
     timeout_seconds: float = 8.0
     max_action_url_bytes: int = 2048
+    action_paths: tuple[tuple[str, str], ...] = DEFAULT_ACTION_PATHS
 
     def __post_init__(self):
         if (not isinstance(self.allowed_action_hosts, tuple)
@@ -79,6 +85,29 @@ class DeliveryConfig:
         if not _finite(self.timeout_seconds) or not 0 < self.timeout_seconds <= 30:
             _configuration_error()
         if type(self.max_action_url_bytes) is not int or not 256 <= self.max_action_url_bytes <= 4096:
+            _configuration_error()
+        if (not isinstance(self.action_paths, tuple) or len(self.action_paths) != len(PURPOSES)
+                or any(not isinstance(item, tuple) or len(item) != 2 for item in self.action_paths)):
+            _configuration_error()
+        try:
+            mapping = dict(self.action_paths)
+            unique_paths = set(mapping.values())
+        except (TypeError, ValueError):
+            _configuration_error()
+        if (len(mapping) != len(self.action_paths) or set(mapping) != PURPOSES
+                or len(unique_paths) != len(PURPOSES)):
+            _configuration_error()
+        for path in mapping.values():
+            if (not isinstance(path, str) or not re.fullmatch(r"/[a-z0-9/-]{1,127}", path)
+                    or path.endswith("/") or "//" in path
+                    or any(segment in {".", ".."} for segment in path.split("/"))):
+                _configuration_error()
+
+    def action_path_for(self, purpose: str) -> str:
+        """Return the only approved action path for a validated purpose."""
+        try:
+            return dict(self.action_paths)[purpose]
+        except (KeyError, TypeError):
             _configuration_error()
 
 
@@ -152,7 +181,7 @@ def _normalize_recipient(value: object) -> str:
     return lowered
 
 
-def _action_url(value: object, config: DeliveryConfig) -> str:
+def _action_url(value: object, config: DeliveryConfig, purpose: str) -> str:
     if (not isinstance(value, str) or len(value.encode("utf-8", "ignore")) > config.max_action_url_bytes
             or any(c.isspace() or ord(c) < 32 for c in value)):
         raise DeliveryBoundaryError("delivery_action_invalid", "Collegamento di azione non valido.", 422)
@@ -161,7 +190,7 @@ def _action_url(value: object, config: DeliveryConfig) -> str:
         pairs = parse_qsl(parts.query, keep_blank_values=True, strict_parsing=True)
         if (parts.scheme != "https" or "@" in parts.netloc or parts.username or parts.password
                 or parts.port not in {None, 443} or parts.hostname not in config.allowed_action_hosts
-                or parts.fragment or not parts.path.startswith("/") or "\\" in value
+                or parts.fragment or parts.path != config.action_path_for(purpose) or "\\" in value
                 or any(segment in {".", ".."} for segment in unquote(parts.path).split("/"))
                 or len(pairs) != 1 or pairs[0][0] != "token"
                 or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", pairs[0][1])):
@@ -220,7 +249,7 @@ class AccountDeliveryBoundary:
         if purpose not in PURPOSES or locale not in LOCALES:
             raise DeliveryBoundaryError("delivery_request_invalid", "Richiesta di consegna non valida.", 422)
         normalized = _normalize_recipient(recipient)
-        action = _action_url(action_url, self.config)
+        action = _action_url(action_url, self.config, purpose)
         try:
             now = self._utc()
             if not isinstance(now, datetime) or now.tzinfo is None:

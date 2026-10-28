@@ -9,7 +9,7 @@ import sys
 import pytest
 
 from delivery_boundary import (AccountDeliveryBoundary, CancellationToken, DeliveryBoundaryError,
-    DeliveryConfig, DeliveryTransportResult, LOCALES, PURPOSES)
+    DEFAULT_ACTION_PATHS, DeliveryConfig, DeliveryTransportResult, LOCALES, PURPOSES)
 
 
 NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
@@ -50,8 +50,10 @@ def boundary(transport=None, reservations=None, token=None, times=None, **config
 
 
 def kwargs(**overrides):
+    purpose = overrides.get("purpose", "verify_email")
+    path = dict(DEFAULT_ACTION_PATHS).get(purpose, "/account/verify-email")
     value = dict(recipient="Person.Synthetic@example.test", purpose="verify_email", locale="it",
-        action_url=f"https://accounts.slps.example/verify?token={TOKEN}",
+        action_url=f"https://accounts.slps.example{path}?token={TOKEN}",
         expires_at_utc=(NOW + timedelta(hours=1)).isoformat(), idempotency_key=KEY)
     value.update(overrides)
     return value
@@ -100,6 +102,22 @@ def test_action_url_is_strict_and_never_leaks_token(url):
     assert TOKEN not in str(error.value) and not transport.calls and not reservations.keys
 
 
+@pytest.mark.parametrize("purpose,wrong_path", [
+    ("verify_email", "/account/reset-password"),
+    ("reset_password", "/account/company-invitation"),
+    ("company_invitation", "/account/verify-email"),
+])
+def test_action_path_is_allowlisted_for_the_specific_purpose(purpose, wrong_path):
+    transport, reservations = Transport(), Reservations()
+    with pytest.raises(DeliveryBoundaryError) as error:
+        boundary(transport, reservations).dispatch(**kwargs(
+            purpose=purpose,
+            action_url=f"https://accounts.slps.example{wrong_path}?token={TOKEN}",
+        ))
+    assert error.value.code == "delivery_action_invalid"
+    assert not transport.calls and not reservations.keys
+
+
 @pytest.mark.parametrize("overrides", [
     {"purpose": "unknown"}, {"locale": "rm"}, {"idempotency_key": "short"},
     {"expires_at_utc": (NOW - timedelta(seconds=1)).isoformat()},
@@ -116,6 +134,16 @@ def test_invalid_policy_values_fail_closed_before_reservation(overrides):
     {"allowed_action_hosts": ()}, {"allowed_action_hosts": ("localhost",)},
     {"allowed_action_hosts": ("127.0.0.1",)}, {"timeout_seconds": 0},
     {"timeout_seconds": float("nan")}, {"timeout_seconds": True}, {"max_action_url_bytes": 10},
+    {"action_paths": (("verify_email", "/account/verify-email"),)},
+    {"action_paths": (("verify_email", "/account/verify-email"),
+                      ("reset_password", "/account/reset-password"),
+                      ("company_invitation", "/bad/../path"))},
+    {"action_paths": (("verify_email", "/account/verify-email"),
+                      ("reset_password", "/account/verify-email"),
+                      ("company_invitation", "/account/company-invitation"))},
+    {"action_paths": ((["verify_email"], "/account/verify-email"),
+                      ("reset_password", "/account/reset-password"),
+                      ("company_invitation", "/account/company-invitation"))},
 ])
 def test_configuration_rejects_local_unbounded_or_nonfinite_values(overrides):
     args = dict(allowed_action_hosts=("accounts.slps.example",), timeout_seconds=8, max_action_url_bytes=2048)
