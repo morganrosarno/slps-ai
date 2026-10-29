@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+private/
+instance/
+uploads/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.sqlite*
+*.log
+

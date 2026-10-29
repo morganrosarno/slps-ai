@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Accesso riservato · SLPS AI</title>
+  <style nonce="{{ nonce }}">
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#101c2e;color:#16283d;font-family:system-ui,sans-serif}main{width:min(100%,440px);padding:36px;border-radius:24px;background:#fff;box-shadow:0 24px 70px #0004}.brand{font-size:14px;font-weight:800;letter-spacing:.16em;color:#086c69}h1{font-size:30px;line-height:1.12;margin:20px 0 16px}p{line-height:1.6;color:#46556a}label{display:block;margin:24px 0 8px;font-weight:650}input,button{font:inherit;width:100%;padding:14px;border-radius:10px}input{border:1px solid #8492a4}button{margin-top:16px;border:0;background:#075e5b;color:#fff;font-weight:750;cursor:pointer}input:focus-visible,button:focus-visible{outline:3px solid #d47b10;outline-offset:3px}.error{padding:12px;border-left:4px solid #9e2d23;background:#fff1ef;color:#7b221a}.note{font-size:13px;margin-bottom:0}
+  </style>
+</head>
+<body><main>
+  <div class="brand">SLPS AI</div>
+  <h1>La tua area di prova</h1>
+  <p>Questo ambiente è riservato al collaudo. Inserisci la password ricevuta per accedere al sito e all’app.</p>
+  {% if message %}<p class="error" role="alert">{{ message }}</p>{% endif %}
+  <form method="post" action="{{ url_for('private_access', next=target) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="password">Password dell’ambiente riservato</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+    <button type="submit">Entra nell’area di prova</button>
+  </form>
+  <p class="note">L’accesso all’area non sostituisce il tuo account aziendale.</p>
+</main></body></html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#13283f">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SLPS AI · Account aziendale</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='account.css') }}">
+  <script src="{{ url_for('static', filename='account.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main" data-i18n="skip">Vai al contenuto</a>
+  <header class="account-header">
+    <a class="brand" href="/" aria-label="SLPS AI"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 36" fill="none"><path d="m16 2 13 5v11c0 8-9 14-13 16C12 32 3 26 3 18V7Z" stroke="currentColor" stroke-width="2"/><path d="m10 18 4 4 9-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>SLPS <strong>AI</strong></span></a>
+    <div class="header-controls"><label class="language-label" for="account-language" data-i18n="language">Lingua</label><select id="account-language" name="language"><option value="it" lang="it">Italiano</option><option value="de" lang="de">Deutsch</option><option value="fr" lang="fr">Français</option><option value="en" lang="en">English</option></select></div>
+  </header>
+  <main id="main" class="account-shell">
+    <section class="account-intro" aria-labelledby="intro-title">
+      <p class="eyebrow" data-i18n="pilot">Pilota riservato · Svizzera</p>
+      <h1 id="intro-title" data-i18n="introTitle">Il tuo account.<br>La tua azienda.</h1>
+      <p class="intro-copy" data-i18n="introCopy">Uno spazio riservato per collegare persone, azienda e analisi.</p>
+      <ol class="account-journey">
+        <li><span class="journey-number">01</span><div><strong data-i18n="stepAccount">Crea il tuo account</strong><p data-i18n="stepAccountCopy">Credenziali personali, accesso riservato.</p></div></li>
+        <li><span class="journey-number">02</span><div><strong data-i18n="stepCompany">Verifica l'azienda</strong><p data-i18n="stepCompanyCopy">Email e autorizzazione aziendale sono controlli distinti.</p></div></li>
+        <li><span class="journey-number">03</span><div><strong data-i18n="stepWorkspace">Apri lo spazio di lavoro</strong><p data-i18n="stepWorkspaceCopy">La prova si abilita soltanto dopo le verifiche.</p></div></li>
+      </ol>
+      <div class="privacy-note"><span aria-hidden="true">↗</span><p data-i18n="privateNote">La registrazione non avvia un'analisi e non invia fotografie.</p></div>
+    </section>
+
+    <section class="account-card" aria-label="SLPS AI">
+      <div id="account-loading" class="loading-state" role="status"><span class="spinner" aria-hidden="true"></span><p data-i18n="loading">Caricamento dell'accesso…</p></div>
+      <div id="account-notice" class="notice" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden></div>
+      <div id="account-unavailable" hidden><p class="eyebrow" data-i18n="privateAccess">Accesso riservato</p><h2 data-i18n="unavailableTitle">Account non ancora disponibili</h2><p data-i18n="unavailableCopy">Questa installazione utilizza ancora l'accesso del pilota. La registrazione aziendale non è attiva.</p><a class="button primary" href="/app/" data-i18n="pilotAccess">Apri l'accesso al pilota</a></div>
+
+      <div id="account-auth" hidden>
+        <nav class="auth-tabs" aria-label="Account"><button id="show-register" class="auth-tab" type="button" data-i18n="registerTab">Crea account</button><button id="show-login" class="auth-tab" type="button" data-i18n="loginTab">Accedi</button></nav>
+        <h2 id="account-heading" tabindex="-1" data-i18n="registerTitle">Inizia dalla tua azienda.</h2>
+        <p id="auth-description" class="card-copy" data-i18n="registerCopy">Inserisci i tuoi dati. L'accesso alle analisi rimane in attesa delle verifiche.</p>
+        <p id="registration-closed" class="notice neutral" data-i18n="registrationClosed" hidden>Le nuove registrazioni sono chiuse in questa installazione. Puoi accedere con un account già creato.</p>
+        <form id="account-register-form" hidden>
+          <div class="field"><label for="register-company" data-i18n="companyName">Ragione sociale</label><input id="register-company" name="company_name" autocomplete="organization" maxlength="160" required></div>
+          <div class="field"><label for="register-identifier" data-i18n="companyIdentifier">Identificativo aziendale, se disponibile</label><input id="register-identifier" name="company_identifier" maxlength="80" aria-describedby="identifier-note"><p id="identifier-note" class="field-note" data-i18n="identifierNote">Ad esempio il numero IDE/CHE. Il solo inserimento non verifica l'azienda.</p></div>
+          <div class="field"><label for="register-role" data-i18n="role">Il tuo ruolo</label><select id="register-role" name="role" required><option value="owner" data-i18n="roleOwner">Titolare o rappresentante</option><option value="employee" data-i18n="roleEmployee">Collaboratore</option><option value="consultant" data-i18n="roleConsultant">Consulente esterno</option></select><p class="field-note" data-i18n="roleNote">Il ruolo dichiarato non sostituisce la verifica dell'autorizzazione.</p></div>
+          <div class="field"><label for="register-email" data-i18n="email">Email personale di lavoro</label><input id="register-email" name="email" type="email" autocomplete="email" maxlength="254" required></div>
+          <div class="field"><label for="register-password" data-i18n="newPassword">Crea una password</label><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="16" maxlength="256" aria-describedby="password-note" required><p id="password-note" class="field-note" data-i18n="passwordNote">Almeno 16 caratteri. Non condividerla con altri.</p></div>
+          <button id="register-submit" class="button primary" type="submit" data-i18n="registerSubmit">Crea l'account aziendale</button>
+        </form>
+        <form id="account-login-form" hidden>
+          <div class="field"><label for="login-email" data-i18n="email">Email personale di lavoro</label><input id="login-email" name="email" type="email" autocomplete="username" maxlength="254" required></div>
+          <div class="field"><label for="login-password" data-i18n="password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="256" required></div>
+          <button id="login-submit" class="button primary" type="submit" data-i18n="loginSubmit">Accedi al tuo account</button>
+          <p class="field-note" data-i18n="recoveryNote">Il recupero password e gli inviti aziendali via email non sono ancora disponibili. Nessuna email parte da questa schermata; non inviare la password a nessuno.</p>
+        </form>
+      </div>
+
+      <div id="account-status" hidden>
+        <div class="status-topline"><span class="eyebrow" data-i18n="yourAccount">Il tuo account aziendale</span><button id="account-logout" class="text-button" type="button" data-i18n="logout">Esci</button></div>
+        <h2 id="status-heading" tabindex="-1" data-i18n="pendingTitle">Completiamo le verifiche.</h2>
+        <p id="account-company-name" class="company-name"></p><p id="account-email" class="account-email"></p>
+        <ol class="verification-list">
+          <li><span class="verification-number" aria-hidden="true">1</span><div><strong data-i18n="emailCheck">Email personale</strong><span id="email-verification"></span></div></li>
+          <li><span class="verification-number" aria-hidden="true">2</span><div><strong data-i18n="companyCheck">Identità dell'azienda</strong><span id="company-verification"></span></div></li>
+          <li><span class="verification-number" aria-hidden="true">3</span><div><strong data-i18n="membershipCheck">Autorizzazione all'azienda</strong><span id="membership-verification"></span></div></li>
+        </ol>
+        <p id="verification-pending-note" class="notice neutral" data-i18n="pendingNote">Le analisi e l'archivio rimangono bloccati fino al completamento di tutti i controlli. Azienda e autorizzazione non sono approvate automaticamente.</p>
+        <p id="delivery-note" class="field-note" data-i18n="deliveryNote">Consegna email non configurata: questa schermata non invia verifiche, recuperi password o inviti aziendali. L'accesso resta bloccato finché una procedura abilitata completa i controlli.</p>
+        <section id="consultation-panel" class="consultation-panel" aria-labelledby="consultation-heading" hidden>
+          <h3 id="consultation-heading" data-i18n="consultationTitle">Contatto con uno specialista</h3>
+          <p class="field-note" data-i18n="consultationDraft">Disponibilità sperimentale separata dalla fatturazione. Nomi, prezzi e regole commerciali non sono definitivi.</p>
+          <button id="consultation-load" class="button secondary" type="button" data-i18n="consultationLoad">Mostra disponibilità</button>
+          <div id="consultation-content" hidden>
+            <dl class="consultation-ledger">
+              <div><dt data-i18n="consultationIncluded">Incluse</dt><dd id="consultation-included">0</dd></div>
+              <div><dt data-i18n="consultationReserved">Prenotate</dt><dd id="consultation-reserved">0</dd></div>
+              <div><dt data-i18n="consultationUsed">Utilizzate</dt><dd id="consultation-used">0</dd></div>
+              <div><dt data-i18n="consultationBalance">Disponibili</dt><dd id="consultation-balance">0</dd></div>
+            </dl>
+            <p id="consultation-availability" class="notice neutral" aria-live="polite"></p>
+            <p class="field-note"><span data-i18n="consultationRenewal">Prossimo rinnovo:</span> <time id="consultation-next-reset"></time></p>
+            <form id="consultation-form">
+              <div class="field"><label for="consultation-case" data-i18n="consultationCase">Caso autorizzato</label><select id="consultation-case" required></select></div>
+              <fieldset class="channel-field"><legend data-i18n="consultationChannel">Come preferisci essere ricontattato?</legend><label><input type="radio" name="consultation-channel" value="phone" checked><span data-i18n="consultationPhone">Telefono</span></label><label><input type="radio" name="consultation-channel" value="whatsapp"><span data-i18n="consultationWhatsapp">WhatsApp</span></label></fieldset>
+              <button id="consultation-submit" class="button primary" type="submit" data-i18n="consultationSubmit">Registra richiesta</button>
+            </form>
+            <p id="consultation-result" class="notice success" role="status" aria-live="polite" tabindex="-1" hidden></p>
+            <p class="field-note" data-i18n="consultationSafety">La richiesta sarà gestita successivamente. Non mostra numeri privati, non effettua chiamate, non invia messaggi e non genera addebiti. Non è prevista una durata massima della chiamata.</p>
+            <ul id="consultation-requests" class="consultation-requests"></ul>
+          </div>
+        </section>
+        <div class="status-actions"><a id="account-workspace" class="button primary" href="/app/" data-i18n="openWorkspace" hidden>Apri lo spazio di lavoro</a><a id="billing-checkout-link" class="button checkout-link" href="/account/checkout" data-i18n="openCheckout" hidden>Prova i piani senza addebito</a><button id="account-refresh" class="button secondary" type="button" data-i18n="refresh">Aggiorna stato</button></div>
+      </div>
+      <a class="back-link" href="/" data-i18n="backHome">← Torna al sito</a>
+    </section>
+  </main>
+  <footer class="account-footer"><span>SLPS AI</span><span data-i18n="footer">Sicurezza sul lavoro · Svizzera</span></footer>
+  <noscript><p class="no-script">JavaScript è necessario per usare questa schermata. JavaScript is required to use this page.</p></noscript>
+</body>
+</html>
